@@ -32,6 +32,8 @@ Follow [Build and run](README.md#build-and-run) in the README. Use the preview s
    cargo test
    ```
 
+   CI runs the same checks on Windows and macOS for every pull request, so code behind `#[cfg(...)]` for one platform is checked even if you only build on the other.
+
 5. Add a line under **Unreleased** in [`CHANGELOG.md`](CHANGELOG.md) if users will notice the change.
 6. Open a pull request and describe what changed and why. Screenshots help for anything visual; include both light and dark appearance when relevant.
 
@@ -44,7 +46,7 @@ Follow [Build and run](README.md#build-and-run) in the README. Use the preview s
 
 ## Reporting bugs
 
-Open an issue with the bug report template. Include your macOS version, chip (Apple Silicon or Intel), how you built Visper, and the steps to reproduce. If a particular recording fails, say what format and length it is; please don't attach private recordings.
+Open an issue with the bug report template. Include your OS version and chip (Apple Silicon or Intel) or, on Windows, your GPU; how you built Visper, and the steps to reproduce. If a particular recording fails, say what format and length it is; please don't attach private recordings.
 
 ## License
 

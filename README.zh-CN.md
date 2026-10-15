@@ -18,7 +18,7 @@ Visper 是一个用 Rust 和 [GPUI](https://www.gpui.rs/) 写的原生桌面应�
 
 适合会议、课程、访谈这类**简体中文、英文或中英混杂**的录音。
 
-> **状态：** 早期版本（v0.1）。目前只支持 macOS，Windows 版本在计划中。界面语言为简体中文。
+> **状态：** 早期版本（v0.1）。支持 macOS 和 Windows。界面语言为简体中文。
 
 ## 功能
 
@@ -26,7 +26,7 @@ Visper 是一个用 Rust 和 [GPUI](https://www.gpui.rs/) 写的原生桌面应�
 - **中英混杂。** “自动”模式按静音把录音切开，每一段单独判断是中文还是英文，中途换语言不会把后面带偏。也可以对整份录音固定为“中文”或“英文”。见 [ADR 0002](docs/adr/0002-zh-en-per-chunk.md)。
 - **只出简体中文。** 繁体字在显示和保存之前用 OpenCC 转成简体。
 - **完整质量的模型。** 使用未量化的 `ggml-large-v3.bin`（约 3.1 GB），首次启动时由应用自动下载并显示进度。
-- **优先用 GPU。** 推理走 Vulkan（macOS 上即 MoltenVK），无法初始化 Vulkan 设备时退回 CPU。见 [ADR 0001](docs/adr/0001-whisper-cpp-vulkan.md)。
+- **优先用 GPU。** 推理走 Vulkan（macOS 上即 MoltenVK，Windows 上由显卡驱动提供），无法初始化 Vulkan 设备时退回 CPU。见 [ADR 0001](docs/adr/0001-whisper-cpp-vulkan.md)。
 - **队列式转写。** 用文件选择器或直接拖进窗口加入录音，按顺序一次转写一份；转写过程中分段实时出现。
 - **分段回听。** 点击任意分段，从那里开始播放录音。
 - **导出 Markdown。** 每个分段一行 `[HH:MM:SS] 文字`。
@@ -41,13 +41,16 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 
 ## 环境要求
 
-- macOS（推荐 Apple Silicon；Intel 机型见下方说明）
+- macOS（推荐 Apple Silicon；Intel 机型见下方说明），或 x86_64 的 Windows 10/11
 - 约 3.1 GB 磁盘空间存放模型，以及足够加载它的内存
-- 构建需要：Rust stable（`rust-toolchain.toml` 会自动安装）、Xcode Command Line Tools 和 [Homebrew](https://brew.sh)
+- Windows 上需要提供 Vulkan 的显卡驱动（`vulkan-1.dll`，新版 NVIDIA、AMD、Intel 驱动都带）和 [Microsoft Visual C++ 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)。没有 `vulkan-1.dll` 时 Visper 无法启动。
+- 构建需要：Rust stable（`rust-toolchain.toml` 会自动安装），以及下面各平台的工具
 
 ## 构建与运行
 
-目前还没有预编译的发布包，需要从源码构建。
+目前还没有预编译的发布包，需要从源码构建。### macOS
+
+需要 Xcode Command Line Tools 和 [Homebrew](https://brew.sh)。
 
 1. 安装构建依赖。whisper.cpp 由 CMake 编译，它的 Vulkan 后端需要 Vulkan loader、头文件、MoltenVK 和 `glslc`（来自 shaderc）：
 
@@ -73,15 +76,34 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 VULKAN_SDK=/usr/local cargo run --release
 ```
 
+### Windows
+
+1. 安装构建依赖：
+   - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)，勾选 **使用 C++ 的桌面开发** 工作负载（MSVC 编译器和 Windows SDK）
+   - [CMake](https://cmake.org/download/)
+   - [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows)。安装器会设置 `VULKAN_SDK`，覆盖 `.cargo/config.toml` 里给 macOS 的默认值；装完后请新开一个终端。
+
+2. 在新终端里克隆并运行：
+
+   ```bash
+   git clone https://github.com/chiyiangel/visper.git
+   ```
+
+   ```bash
+   cd visper && cargo run --release
+   ```
+
+只支持 `x86_64-pc-windows-msvc`。每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 里构建 `visper.exe`，作为 `visper-windows-x86_64` artifact 附在那次运行上。
+
 ### 数据存放位置
 
-全部在 `~/Library/Application Support/Visper/` 下：
+全部在一个文件夹里：macOS 上是 `~/Library/Application Support/Visper/`，Windows 上是 `%LOCALAPPDATA%\Visper\`。
 
 | 文件 | 内容 |
 | --- | --- |
 | `ggml-large-v3.bin` | Whisper 模型（下载中为 `.part`） |
 | `library.json` | 资料库：录音路径、状态和转写稿 |
-| `instance.sock` | 防止重复启动时打开第二个窗口 |
+| `instance.sock` | 仅 macOS：防止重复启动时打开第二个窗口（Windows 上改用命名管道） |
 
 录音文件本身不会被复制。想重置 Visper，退出应用后删除这个文件夹即可。
 

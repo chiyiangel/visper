@@ -38,8 +38,8 @@ body:
   - type: input
     id: os
     attributes:
-      label: OS and chip / 系统与芯片
-      placeholder: macOS 15.7, Apple M2
+      label: OS and chip or GPU / 系统与芯片或显卡
+      placeholder: macOS 15.7, Apple M2 / Windows 11 24H2, RTX 4060
     validations:
       required: true
   - type: textarea
