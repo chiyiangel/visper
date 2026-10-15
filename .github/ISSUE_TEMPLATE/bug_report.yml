@@ -1,0 +1,50 @@
+name: Bug report / 问题反馈
+description: Something in Visper doesn't work as expected. / Visper 的某处行为不符合预期。
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. English or Chinese is fine. Please don't attach private recordings.
+        感谢反馈，中英文均可。请不要上传含隐私的录音。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened? / 发生了什么？
+      description: Include what you expected instead. / 也请写下你预期的结果。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: |
+        1. Add a 40-minute mp3 recording
+        2. Set language to 自动
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: recording
+    attributes:
+      label: Recording details / 录音信息
+      description: Format, length, and the languages spoken. / 格式、时长和说的语言。
+  - type: input
+    id: version
+    attributes:
+      label: Visper version or commit / 版本或 commit
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and chip / 系统与芯片
+      placeholder: macOS 15.7, Apple M2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error messages / 日志或报错
+      description: Terminal output if you ran Visper from `cargo run`. / 如果用 `cargo run` 启动，请贴上终端输出。
+      render: text

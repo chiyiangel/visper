@@ -2,6 +2,16 @@
 name = "visper"
 version = "0.1.0"
 edition = "2024"
+description = "Local, offline transcription of Chinese and English recordings with Whisper large-v3"
+authors = ["Liu Jun <chiyiangel@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/chiyiangel/visper"
+homepage = "https://github.com/chiyiangel/visper"
+readme = "README.md"
+keywords = ["whisper", "transcription", "speech-to-text", "gpui", "offline"]
+categories = ["multimedia::audio", "gui"]
+# A desktop app, not a library for crates.io.
+publish = false
 
 [[bin]]
 name = "visper"

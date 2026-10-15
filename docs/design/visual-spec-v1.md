@@ -4,7 +4,7 @@
 
 设计目标：让导入录音、等待转写、阅读转写稿和回听这些操作清晰、安静、有质感。质感来自稳定的布局、准确的对齐、舒适的文字和细致的状态反馈。
 
-本次设计独立于已有 prototype。功能与术语沿用 `GLOSSARY.md`、`.scratch/visper/spec.md` 和相关 ADR。本文规定视觉呈现，不改变转写、排队、保存或导出的业务规则。
+本次设计独立于已有 prototype。功能与术语沿用 `GLOSSARY.md`、产品规格（未随仓库发布）和相关 ADR。本文规定视觉呈现，不改变转写、排队、保存或导出的业务规则。
 
 ## 1. 如何使用这份规范
 
@@ -14,15 +14,15 @@
 
 图片由 imagegen 生成，用于参考风格、布局与状态。图片中的像素、间距、颜色和字体并非精确测量结果；下面的数值是为开发统一制定的实现参数。图片与本文不一致时，视觉参数以本文为准，功能行为以产品规格为准。
 
-交付时同时查看本文与以下五张图：
+交付时同时查看本文与以下五张概念图（概念图未随仓库发布；当前实现的界面见 [current-gui.html](current-gui.html)）：
 
 | 场景 | 参考图 |
 | --- | --- |
-| 首次使用：下载模型、导入录音 | [01-first-launch-v2.png](../../output/imagegen/visper-concept-v1/01-first-launch-v2.png) |
-| 转写中：队列、进度、实时分段 | [02-transcribing.png](../../output/imagegen/visper-concept-v1/02-transcribing.png) |
-| 完成：阅读、分段回听 | [03-transcript-playback.png](../../output/imagegen/visper-concept-v1/03-transcript-playback.png) |
-| 导出 Markdown | [04-markdown-export-v2.png](../../output/imagegen/visper-concept-v1/04-markdown-export-v2.png) |
-| 深色模式：文件缺失 | [05-missing-dark.png](../../output/imagegen/visper-concept-v1/05-missing-dark.png) |
+| 首次使用：下载模型、导入录音 | `01-first-launch-v2.png` |
+| 转写中：队列、进度、实时分段 | `02-transcribing.png` |
+| 完成：阅读、分段回听 | `03-transcript-playback.png` |
+| 导出 Markdown | `04-markdown-export-v2.png` |
+| 深色模式：文件缺失 | `05-missing-dark.png` |
 
 ## 2. 整体风格与边界
 
