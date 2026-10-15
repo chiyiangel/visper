@@ -1,6 +1,10 @@
+// Release builds are a GUI app on Windows: no console window behind it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod assets;
 mod dock;
 mod download;
+mod instance;
 mod markdown;
 mod playback;
 mod store;
@@ -8,8 +12,6 @@ mod theme;
 mod transcribe;
 mod ui;
 
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
 use std::time::Duration;
 
 use gpui::{App, Application, Timer};
@@ -27,19 +29,9 @@ fn main() {
     }
     let support = ui::support_dir();
     let _ = std::fs::create_dir_all(&support);
-    let socket = support.join("instance.sock");
-    let listener = match claim_primary(&socket) {
-        Some(listener) => listener,
-        None => return,
+    let Some(rx) = instance::claim(&support) else {
+        return;
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for incoming in listener.incoming() {
-            if incoming.is_ok() {
-                let _ = tx.send(());
-            }
-        }
-    });
 
     Application::new()
         .with_assets(assets::Assets)
@@ -82,18 +74,4 @@ fn preview_scenario() -> Option<String> {
         .to_str()?
         .strip_prefix("visper-preview-")
         .map(str::to_owned)
-}
-
-fn claim_primary(socket: &Path) -> Option<UnixListener> {
-    if UnixStream::connect(socket).is_ok() {
-        return None;
-    }
-    let _ = std::fs::remove_file(socket);
-    match UnixListener::bind(socket) {
-        Ok(listener) => Some(listener),
-        Err(_) => {
-            let _ = UnixStream::connect(socket);
-            None
-        }
-    }
 }

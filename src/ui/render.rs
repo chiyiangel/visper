@@ -1414,9 +1414,13 @@ fn local_time_after(ms: u64) -> String {
     let seconds = at
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs()) as libc::time_t;
-    // SAFETY: localtime_r reads `seconds` and writes only into `local`.
+    // SAFETY: localtime_r and localtime_s read `seconds` and write only into
+    // `local`.
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&seconds, &mut local) };
+    #[cfg(unix)]
+    let _ = unsafe { libc::localtime_r(&seconds, &mut local) };
+    #[cfg(windows)]
+    let _ = unsafe { libc::localtime_s(&mut local, &seconds) };
     format!("{:02}:{:02}", local.tm_hour, local.tm_min)
 }
 
