@@ -83,7 +83,13 @@ VULKAN_SDK=/usr/local cargo run --release
    - [CMake](https://cmake.org/download/)
    - The [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows). Its installer sets `VULKAN_SDK`, which overrides the macOS default in `.cargo/config.toml`; open a new terminal afterwards.
 
-2. Clone and run, in a new terminal:
+2. Point Cargo at a short target directory. MSBuild cannot handle paths over 260 characters, and whisper.cpp's build nests deep enough that a target directory longer than about 20 characters fails with `FTK1011` or `MSB8066`:
+
+   ```powershell
+   setx CARGO_TARGET_DIR C:\t
+   ```
+
+3. Clone and run, in a new terminal:
 
    ```bash
    git clone https://github.com/chiyiangel/visper.git

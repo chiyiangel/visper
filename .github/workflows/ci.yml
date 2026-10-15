@@ -29,7 +29,16 @@ jobs:
           cache: true
           stripdown: true
 
+      # MSBuild cannot write paths over 260 characters, and whisper.cpp's
+      # shader generator build nests deep enough under target\release to cross
+      # it. A target directory next to the checkout keeps it under.
+      - name: Use a short target directory
+        shell: pwsh
+        run: echo "CARGO_TARGET_DIR=$((Resolve-Path ..).Path)\t" >> $env:GITHUB_ENV
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> ../t"
 
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
@@ -39,7 +48,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: visper-windows-x86_64
-          path: target/release/visper.exe
+          path: ${{ env.CARGO_TARGET_DIR }}\release\visper.exe
           retention-days: 14
           if-no-files-found: error
 

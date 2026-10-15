@@ -83,7 +83,13 @@ VULKAN_SDK=/usr/local cargo run --release
    - [CMake](https://cmake.org/download/)
    - [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows)。安装器会设置 `VULKAN_SDK`，覆盖 `.cargo/config.toml` 里给 macOS 的默认值；装完后请新开一个终端。
 
-2. 在新终端里克隆并运行：
+2. 给 Cargo 一个短的 target 目录。MSBuild 处理不了超过 260 个字符的路径，而 whisper.cpp 的构建目录嵌套很深，target 目录路径超过大约 20 个字符就会报 `FTK1011` 或 `MSB8066`：
+
+   ```powershell
+   setx CARGO_TARGET_DIR C:\t
+   ```
+
+3. 在新终端里克隆并运行：
 
    ```bash
    git clone https://github.com/chiyiangel/visper.git
