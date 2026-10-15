@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visper 当前界面</title>
+<style>
+  :root {
+    --board: #e4e2dc;
+    --board-ink: #2c332f;
+    --board-dim: #5c6560;
+    --board-line: #d0cec7;
+    --board-paper: #f4f3ef;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--board);
+    color: var(--board-ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  body[data-theme="dark"] {
+    --board: #121614;
+    --board-ink: #e7ebe4;
+    --board-dim: #a8b2a8;
+    --board-line: #2e3530;
+    --board-paper: #1a1e1c;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 22px;
+    background: var(--board-paper);
+    border-bottom: 1px solid var(--board-line);
+  }
+  .banner h1 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; }
+  .banner p { margin: 2px 0 0; color: var(--board-dim); font-size: 12px; line-height: 18px; }
+  .banner button {
+    flex: none;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--board-line);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .layout { display: grid; grid-template-columns: 188px minmax(0, 1fr); }
+  nav {
+    position: sticky;
+    top: 12px;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 16px 0 32px 14px;
+  }
+  nav a {
+    color: inherit;
+    text-decoration: none;
+    font-size: 12px;
+    line-height: 18px;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+  nav a:hover { background: color-mix(in srgb, var(--board-ink) 6%, transparent); }
+  main { min-width: 0; padding: 8px 28px 64px 8px; }
+  .slice { scroll-margin-top: 16px; padding-top: 28px; }
+  .meta h2 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; }
+  .meta p { margin: 4px 0 12px; max-width: 720px; color: var(--board-dim); font-size: 12px; line-height: 18px; }
+  .stage { min-width: 0; }
+.variants { display: flex; flex-direction: column; align-items: stretch; gap: 20px; max-width: 720px; }
+figure { margin: 0; min-width: 0; width: 100%; }
+  figcaption { margin: 0 0 6px; color: var(--board-dim); font-size: 12px; line-height: 18px; }
+
+  .product {
+    --main: #faf9f6;
+    --sidebar: #efeeea;
+    --raised: #ffffff;
+    --track: #e9e8e3;
+    --line: #ddded8;
+    --ink: #202622;
+    --secondary: #5d655f;
+    --tertiary: #626a64;
+    --accent: #426650;
+    --accent-hover: #365940;
+    --accent-pressed: #2d4c3d;
+    --on-accent: #ffffff;
+    --selected: #e0e7de;
+    --playing: #eef2ec;
+    --warning: #8a6429;
+    --warning-surface: #f5f0e5;
+    --danger: #9c443f;
+    --danger-surface: #f7ece9;
+    --disabled: #929990;
+    --mark: #43644d;
+    --mark-soft: #a3bba4;
+    color: var(--ink);
+    background: var(--main);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
+    font-size: 13px;
+    line-height: 20px;
+    font-weight: 400;
+  }
+  body[data-theme="dark"] .product {
+    --main: #222623;
+    --sidebar: #1b1f1c;
+    --raised: #2b312c;
+    --track: #1b1f1c;
+    --line: #3b433c;
+    --ink: #f1f3ee;
+    --secondary: #b5bdb3;
+    --tertiary: #9ba59a;
+    --accent: #abc4ad;
+    --accent-hover: #bbd0bd;
+    --accent-pressed: #91b294;
+    --on-accent: #19221c;
+    --selected: #344538;
+    --playing: #2d3b30;
+    --warning: #d1b06f;
+    --warning-surface: #332f23;
+    --danger: #e29e94;
+    --danger-surface: #3a2927;
+    --disabled: #647065;
+    --mark: #d7e6d6;
+    --mark-soft: #8aa58c;
+  }
+  .frame { border: 1px solid color-mix(in srgb, var(--board-ink) 16%, transparent); border-radius: 10px; overflow: hidden; }
+  .window { width: 1120px; height: 760px; display: flex; flex-direction: column; }
+  .titlebar {
+    height: 52px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px 0 96px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .lights { position: absolute; left: 16px; top: 18px; display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .lights i:nth-child(1) { background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+  .app-title { font-weight: 500; }
+  .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .mark { display: block; flex: none; height: 28px; width: auto; }
+  .mark-lg { height: 96px; }
+  .mark.dark { display: none; }
+  body[data-theme="dark"] .mark.light { display: none; }
+  body[data-theme="dark"] .mark.dark { display: block; }
+  .cols { flex: 1; min-height: 0; display: flex; }
+  .sidebar {
+    width: 280px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--sidebar);
+    border-right: 1px solid var(--line);
+  }
+  .side-head { padding: 20px 20px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .side-title { font-weight: 600; }
+  .count { font-size: 11px; line-height: 16px; color: var(--tertiary); }
+  .list { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 16px; display: flex; flex-direction: column; gap: 2px; }
+  .group {
+    margin: 16px 0 4px;
+    padding: 0 8px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--secondary);
+    font-size: 12px;
+    line-height: 18px;
+    font-weight: 500;
+  }
+  .group span:last-child { font-weight: 400; }
+  .row {
+    height: 60px;
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: transparent;
+  }
+  .row.running { height: 76px; }
+  .row.is-selected { background: var(--selected); }
+  .row:hover:not(.is-selected) { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+  .row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta-line { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--secondary); font-size: 12px; line-height: 18px; }
+  .meta-line .extra { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+  .side-foot {
+    height: 48px;
+    margin: 0 20px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid var(--line);
+    color: var(--secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .empty-note { margin-top: 32px; text-align: center; color: var(--secondary); font-size: 12px; line-height: 18px; }
+  .detail { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--main); }
+  .header { padding: 24px 32px 20px; display: flex; flex-direction: column; gap: 12px; flex: none; }
+  .title-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+  .filename { flex: 1; min-width: 240px; font-size: 22px; line-height: 30px; font-weight: 600; }
+  .path, .dim, .hint { color: var(--secondary); font-size: 12px; line-height: 18px; }
+  .path { overflow-wrap: anywhere; }
+  .info { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .rule { margin: 0 32px; border-top: 1px solid var(--line); padding: 20px 0 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex: none; }
+  .heading { font-size: 15px; line-height: 22px; font-weight: 600; }
+  .transcript { flex: 1; min-height: 0; overflow: auto; padding: 0 32px 8px; }
+  .reading { max-width: 880px; padding: 4px 0 24px; }
+  .segment { display: flex; align-items: flex-start; gap: 8px; padding: 3px 10px; border-radius: 8px; }
+  .segment:hover:not(.playing) { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  .segment.playing { background: var(--playing); }
+  .stamp {
+    width: 64px;
+    flex: none;
+    font-family: Menlo, ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 24px;
+    color: var(--secondary);
+  }
+  .segment:hover .stamp, .segment.playing .stamp { color: var(--accent); }
+  .segment.playing .stamp { font-weight: 600; }
+  .body { flex: 1; min-width: 0; font-size: 15px; line-height: 24px; }
+  .sel { background: var(--selected); }
+  .live { margin-top: 8px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--secondary); font-size: 12px; line-height: 18px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+  .playback {
+    height: 64px;
+    margin: 0 32px;
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .play-side { display: flex; align-items: center; gap: 12px; }
+  .mono { font-family: Menlo, ui-monospace, monospace; }
+  button { font: inherit; color: inherit; }
+  .btn {
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    font-weight: 500;
+    flex: none;
+    cursor: default;
+  }
+  .btn-primary {
+    padding: 0 14px 0 10px;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .10);
+  }
+  .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn-secondary {
+    background: var(--raised);
+    border-color: var(--line);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .05);
+  }
+  .btn-secondary:hover { background: color-mix(in srgb, var(--ink) 4%, var(--raised)); }
+  .btn-quiet:hover, .btn-icon:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .btn-icon { width: 32px; height: 32px; padding: 0; color: var(--secondary); }
+  .btn.is-disabled, .btn:disabled {
+    color: var(--disabled);
+    background: transparent;
+    border-color: var(--line);
+    box-shadow: none;
+  }
+  .btn-lg { height: 40px; padding: 0 20px; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; }
+  .play {
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .10);
+    flex: none;
+    cursor: default;
+  }
+  .play:hover { background: var(--accent-hover); }
+  .play.is-disabled { background: transparent; border: 1px solid var(--line); color: var(--disabled); box-shadow: none; }
+  .icon { width: 16px; height: 16px; display: block; flex: none; }
+  .icon-14 { width: 14px; height: 14px; }
+  .icon-18 { width: 18px; height: 18px; }
+  .icon-20 { width: 20px; height: 20px; }
+  .icon-24 { width: 24px; height: 24px; }
+  .icon-40 { width: 40px; height: 40px; }
+  .icon-48 { width: 48px; height: 48px; }
+  .strip {
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .strip-copy { display: flex; flex-direction: column; gap: 2px; flex: none; }
+  .strip-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 24px; }
+  .bar { height: 4px; flex: 1; min-width: 80px; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 24px;
+    background: var(--warning-surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .notice .dim { flex: 1; }
+  .lang {
+    position: relative;
+    width: 216px;
+    height: 32px;
+    display: flex;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--track);
+    flex: none;
+  }
+  .lang .pill {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: calc((100% - 4px) / 3);
+    border-radius: 6px;
+    background: var(--raised);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .06);
+  }
+  .lang button {
+    position: relative;
+    flex: 1;
+    border: 0;
+    background: transparent;
+    font-weight: 500;
+    color: var(--secondary);
+    cursor: default;
+  }
+  .lang button.on { color: var(--ink); }
+  .card {
+    padding: 14px 16px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--raised);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.card-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; flex: 1; font-size: 15px; line-height: 22px; font-weight: 600; }
+  .card-title.pending { font-weight: 500; color: var(--secondary); }
+  .stats { display: flex; flex-wrap: wrap; column-gap: 20px; row-gap: 4px; }
+  .stat { display: inline-flex; gap: 4px; font-size: 12px; line-height: 18px; }
+  .stat b { font-weight: 400; color: var(--ink); }
+  .percent { width: 36px; text-align: right; color: var(--secondary); font-size: 12px; line-height: 18px; }
+  .meter { display: flex; align-items: center; gap: 12px; }
+  .alert { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border-radius: 8px; }
+  .alert .copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .alert strong { font-weight: 500; font-size: 13px; line-height: 20px; }
+  .alert.warn { background: var(--warning-surface); }
+  .alert.warn strong, .alert.warn .icon { color: var(--warning); }
+  .alert.bad { background: var(--danger-surface); }
+  .alert.bad strong, .alert.bad .icon { color: var(--danger); }
+  .empty {
+    flex: 1;
+    margin: 32px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .empty-inner {
+    max-width: 440px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+    padding-bottom: 32px;
+    color: var(--secondary);
+  }
+  .empty-title { margin-top: 8px; font-size: 24px; line-height: 32px; font-weight: 600; color: var(--ink); }
+  .formats { font-size: 11px; line-height: 16px; color: var(--tertiary); }
+  .local { margin-top: 16px; display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 18px; }
+  .unselected { height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--secondary); }
+  .more { position: relative; flex: none; }
+  .menu {
+    position: absolute;
+    top: 40px;
+    right: 0;
+    width: 196px;
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--raised);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .08);
+  }
+  .menu .btn { width: 100%; justify-content: flex-start; color: var(--danger); }
+  .menu-host { width: 240px; padding: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.menu-host .menu { position: static; }
+.pane { width: min(720px, 100%); }
+.pane.narrow { width: min(460px, 100%); }
+.strip-frame { width: min(920px, 100%); }
+.sidebar-frame { height: 560px; width: 280px; }
+.wide { width: 100%; max-width: 640px; }
+.detail-only { width: min(720px, 100%); }
+  .detail-only .header, .detail-only .playback { margin-left: 0; margin-right: 0; }
+  .detail-only .header { padding-left: 0; padding-right: 0; }
+  .pad { padding: 16px 20px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; width: min(640px, 100%); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M14 2v6h6M8 13v4m4-7v10m4-6v2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3v14H7zm7 0h3v14h-3z" fill="currentColor"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-warning" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7v6m0 3v.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 16V3m-4 4 4-4 4 4M5 11v10h14V11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-retry" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 7a7 7 0 0 1 12-2l2 3M4 16l2 3a7 7 0 0 0 12-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.75"/><circle cx="12" cy="12" r="1.75"/><circle cx="19" cy="12" r="1.75"/></symbol>
+  <symbol id="i-remove" viewBox="0 0 24 24"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-waiting" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cancelled" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+</svg>
+
+<header class="banner">
+  <div>
+    <h1>Visper 当前界面</h1>
+    <p>按现在的实现拆开。在这个浏览器里按 Cmd+Shift+D 进入 Design Mode，点一块功能直接说要改什么。颜色和控件样式是共用的。</p>
+  </div>
+  <button id="theme" type="button">查看深色</button>
+</header>
+
+<div class="layout">
+<nav>
+  <a href="#assembled">整窗 · 完成回听</a>
+  <a href="#transcribing">整窗 · 转写中</a>
+  <a href="#first-run">整窗 · 首次使用</a>
+  <a href="#title-bar">标题栏</a>
+  <a href="#download">模型下载</a>
+  <a href="#download-failed">下载失败</a>
+  <a href="#notice">通知</a>
+  <a href="#library">资料库</a>
+  <a href="#detail">详情与操作</a>
+  <a href="#more">更多操作</a>
+  <a href="#language">语言</a>
+  <a href="#progress">转写进度</a>
+  <a href="#transcript">转写稿</a>
+  <a href="#playback">播放</a>
+  <a href="#missing">文件缺失</a>
+  <a href="#failure">转写失败</a>
+  <a href="#queued">等待中</a>
+  <a href="#unselected">未选择</a>
+</nav>
+<main>
+
+<section class="slice" id="assembled">
+  <div class="meta">
+    <h2>整窗 · 完成并回听</h2>
+    <p>完成状态。资料库只显示「已结束」。第三段正在播放。导出和重新转写都可用。</p>
+  </div>
+  <div class="stage">
+    <div class="product frame window" data-fit="1120" data-design="window-completed" data-source="VisperWindow::render">
+      <header class="titlebar" data-design="title-bar" data-source="title_bar">
+        <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="brand" data-design="brand"><img class="mark light" src="mark.png" alt=""><img class="mark dark" src="mark-dark.png" alt=""><div class="app-title">Visper</div></div>
+        <button class="btn btn-primary" type="button" data-design="add-recording"><svg class="icon"><use href="#i-plus"/></svg>加入录音</button>
+      </header>
+      <div class="cols">
+        <aside class="sidebar" data-design="library" data-source="sidebar">
+          <div class="side-head" data-design="library-heading">
+            <div class="side-title">资料库</div>
+            <div class="count">5 份录音</div>
+          </div>
+          <div class="list">
+            <div class="group" data-design="library-group"><span>已结束</span><span>5</span></div>
+            <div class="row is-selected" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--accent);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">产品讨论.m4a</div>
+                <div class="meta-line"><span class="status" style="color:var(--accent)"><svg class="icon icon-14"><use href="#i-check"/></svg></span><span class="status">完成</span><span class="extra">· 18:05 · 用时 04:08</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">访谈记录.wav</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">课程录音.mp3</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">团队周会.m4a</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">项目回顾.flac</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="side-foot" data-design="library-footer"><svg class="icon icon-14"><use href="#i-lock"/></svg>本机转写</div>
+        </aside>
+        <section class="detail" data-design="detail" data-source="detail">
+          <div class="header" data-design="detail-header">
+            <div class="title-row">
+              <div class="filename" data-design="filename">产品讨论.m4a</div>
+              <div class="actions" data-design="detail-actions" data-source="detail_actions">
+                <button class="btn btn-secondary" type="button" data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+                <button class="btn btn-secondary" type="button" data-design="rerun"><svg class="icon"><use href="#i-retry"/></svg>重新转写</button>
+                <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+              </div>
+            </div>
+            <div class="path" data-design="path">/Users/lin/录音/产品讨论.m4a</div>
+            <div class="info" data-design="recording-info">
+              <span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg><span class="dim">完成</span></span>
+              <span class="dim">18:05</span>
+              <span class="dim" data-design="language-note">自动识别语言</span>
+              <span class="dim">转写用时 04:08</span>
+            </div>
+          </div>
+          <div class="rule" data-design="transcript-heading">
+            <div class="heading">转写稿</div>
+            <div class="hint">点击分段，从此处回听</div>
+          </div>
+          <div class="transcript" data-design="transcript" data-source="transcript">
+            <div class="reading">
+              <div class="segment" data-design="segment"><div class="stamp">00:00:04</div><div class="body">我们先看一下这次产品讨论的目标。</div></div>
+              <div class="segment" data-design="segment"><div class="stamp">00:00:18</div><div class="body">界面需要更清晰，让主要操作自然出现。</div></div>
+              <div class="segment playing" data-design="segment-playing"><div class="stamp">00:00:36</div><div class="body">We should keep the workflow simple and predictable.</div></div>
+              <div class="segment" data-design="segment"><div class="stamp">00:00:52</div><div class="body">语言自动判断，中文和英文都保留原文。</div></div>
+              <div class="segment" data-design="segment"><div class="stamp">00:01:16</div><div class="body">接下来讨论导入和转写的反馈。</div></div>
+              <div class="segment" data-design="segment"><div class="stamp">00:01:42</div><div class="body">完成之后，可以按分段回听，再导出 Markdown。</div></div>
+            </div>
+          </div>
+          <div class="playback" data-design="playback" data-source="playback_bar">
+            <div class="play-side">
+              <button class="play" type="button" data-design="play" aria-label="暂停"><svg class="icon"><use href="#i-pause"/></svg></button>
+              <span>正在播放</span>
+              <span class="dim mono">00:41 / 18:05</span>
+            </div>
+            <span class="hint">点击分段跳转</span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slice" id="transcribing">
+  <div class="meta">
+    <h2>整窗 · 转写中</h2>
+    <p>首次转写。语言已锁定成文字，导出不可用，没有「重新转写」。分段是实时结果，播放可用。</p>
+  </div>
+  <div class="stage">
+    <div class="product frame window" data-fit="1120" data-design="window-transcribing" data-source="VisperWindow::render">
+      <header class="titlebar" data-design="title-bar">
+        <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="brand" data-design="brand"><img class="mark light" src="mark.png" alt=""><img class="mark dark" src="mark-dark.png" alt=""><div class="app-title">Visper</div></div>
+        <button class="btn btn-primary" type="button" data-design="add-recording"><svg class="icon"><use href="#i-plus"/></svg>加入录音</button>
+      </header>
+      <div class="cols">
+        <aside class="sidebar" data-design="library">
+          <div class="side-head"><div class="side-title">资料库</div><div class="count">5 份录音</div></div>
+          <div class="list">
+            <div class="group"><span>转写中</span><span>1</span></div>
+            <div class="row running is-selected" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--accent);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">产品讨论.m4a</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-waiting"/></svg>转写中</span><span class="extra">· 还需约 2 分钟</span></div>
+                <div class="bar" style="margin-top:4px" data-design="library-progress"><span style="width:68%"></span></div>
+              </div>
+            </div>
+            <div class="group"><span>等待中</span><span>2</span></div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">访谈记录.wav</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14"><use href="#i-waiting"/></svg>等待中</span><span class="extra">· 40:00</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">课程录音.mp3</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14"><use href="#i-waiting"/></svg>等待中</span><span class="extra">· 40:00</span></div>
+              </div>
+            </div>
+            <div class="group"><span>已结束</span><span>2</span></div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">团队周会.m4a</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+            <div class="row" data-design="library-row">
+              <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+              <div class="row-copy">
+                <div class="name">项目回顾.flac</div>
+                <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="side-foot"><svg class="icon icon-14"><use href="#i-lock"/></svg>本机转写</div>
+        </aside>
+        <section class="detail" data-design="detail">
+          <div class="header">
+            <div class="title-row">
+              <div class="filename">产品讨论.m4a</div>
+              <div class="actions">
+                <button class="btn is-disabled" type="button" disabled data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+                <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+              </div>
+            </div>
+            <div class="path">/Users/lin/录音/产品讨论.m4a</div>
+            <div class="info">
+              <span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-waiting"/></svg><span class="dim">转写中</span></span>
+              <span class="dim">18:05</span>
+              <span class="dim">自动识别语言</span>
+            </div>
+            <div class="card" data-design="progress" data-source="transcription_progress">
+              <div class="card-top">
+                <div class="card-title">还需约 2 分钟<span class="dim" style="font-weight:400">预计 15:20 完成</span></div>
+                <button class="btn btn-secondary" type="button" data-design="cancel">取消转写</button>
+              </div>
+              <div class="meter">
+                <div class="bar" data-design="progress-bar"><span style="width:68%"></span></div>
+                <span class="percent mono">68%</span>
+              </div>
+              <div class="stats">
+                <span class="stat dim">已用时 <b class="mono">04:12</b></span>
+                <span class="stat dim">已处理 <b class="mono">12:18 / 18:05</b></span>
+                <span class="stat dim">速度 <b class="mono">2.9×</b></span>
+              </div>
+            </div>
+          </div>
+          <div class="rule">
+            <div class="heading">转写稿</div>
+            <div class="hint">分段实时显示</div>
+          </div>
+          <div class="transcript" data-design="transcript">
+            <div class="reading">
+              <div class="segment"><div class="stamp">00:00:04</div><div class="body">我们先看一下这次产品讨论的目标。</div></div>
+              <div class="segment"><div class="stamp">00:00:18</div><div class="body">界面需要更清晰，让主要操作自然出现。</div></div>
+              <div class="segment"><div class="stamp">00:00:36</div><div class="body">We should keep the workflow simple and predictable.</div></div>
+              <div class="live" data-design="live-tail"><span class="dot"></span>正在转写后续内容…</div>
+            </div>
+          </div>
+          <div class="playback" data-design="playback">
+            <div class="play-side">
+              <button class="play" type="button" data-design="play" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button>
+              <span>播放</span>
+            </div>
+            <span class="hint">点击分段跳转</span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slice" id="first-run">
+  <div class="meta">
+    <h2>整窗 · 首次使用</h2>
+    <p>模型还在下载，资料库是空的。下载未完成也可以加入录音。拖入文件时虚线框会变成强调色。</p>
+  </div>
+  <div class="stage">
+    <div class="product frame window" data-fit="1120" data-design="window-first-run" data-source="empty_detail">
+      <header class="titlebar" data-design="title-bar">
+        <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="brand" data-design="brand"><img class="mark light" src="mark.png" alt=""><img class="mark dark" src="mark-dark.png" alt=""><div class="app-title">Visper</div></div>
+        <button class="btn btn-primary" type="button" data-design="add-recording"><svg class="icon"><use href="#i-plus"/></svg>加入录音</button>
+      </header>
+      <div class="strip" data-design="download-strip" data-source="download_strip">
+        <svg class="icon icon-24" style="color:var(--accent)"><use href="#i-download"/></svg>
+        <div class="strip-main">
+          <div class="strip-copy">
+            <div style="font-weight:500">正在准备转写模型</div>
+            <div class="dim">首次使用需下载一次，之后可离线转写</div>
+          </div>
+          <div class="bar" data-design="download-progress"><span style="width:57%"></span></div>
+        </div>
+        <div class="dim mono">1.8 / 3.1 GB · 57%</div>
+      </div>
+      <div class="cols">
+        <aside class="sidebar" data-design="library-empty">
+          <div class="side-head"><div class="side-title">资料库</div><div class="count">0 份录音</div></div>
+          <div class="list"><div class="empty-note" data-design="library-empty-copy">还没有录音</div></div>
+          <div class="side-foot"><svg class="icon icon-14"><use href="#i-lock"/></svg>本机转写</div>
+        </aside>
+        <section class="detail">
+          <div class="empty" data-design="empty-state" data-source="empty_detail">
+            <div class="empty-inner">
+              <img class="mark mark-lg light" data-design="brand-hero" src="mark.png" alt="Visper"><img class="mark mark-lg dark" data-design="brand-hero" src="mark-dark.png" alt="">
+              <div class="empty-title">把录音变成文字</div>
+              <div>拖入录音，或选择本机文件</div>
+              <button class="btn btn-primary btn-lg" type="button" data-design="choose-recording">选择录音</button>
+              <div class="formats">M4A · MP3 · WAV · FLAC · AAC</div>
+              <div class="local"><svg class="icon icon-14"><use href="#i-lock"/></svg>录音与转写稿保留在本机</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slice" id="title-bar">
+  <div class="meta">
+    <h2>标题栏</h2>
+    <p>title_bar。左侧留给系统交通灯。唯一的主要按钮是「加入录音」。</p>
+  </div>
+  <div class="product frame strip-frame" data-design="title-bar" data-source="title_bar">
+    <header class="titlebar">
+      <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="brand" data-design="brand"><img class="mark light" src="mark.png" alt=""><img class="mark dark" src="mark-dark.png" alt=""><div class="app-title">Visper</div></div>
+      <button class="btn btn-primary" type="button" data-design="add-recording"><svg class="icon"><use href="#i-plus"/></svg>加入录音</button>
+    </header>
+  </div>
+</section>
+
+<section class="slice" id="download">
+  <div class="meta">
+    <h2>模型下载</h2>
+    <p>download_strip。出现在标题栏下方，没有取消。完成后整条消失。</p>
+  </div>
+  <div class="product frame strip-frame strip" data-design="download-strip" data-source="download_strip">
+    <svg class="icon icon-24" style="color:var(--accent)"><use href="#i-download"/></svg>
+    <div class="strip-main">
+      <div class="strip-copy">
+        <div style="font-weight:500">正在准备转写模型</div>
+        <div class="dim">首次使用需下载一次，之后可离线转写</div>
+      </div>
+      <div class="bar" data-design="download-progress"><span style="width:57%"></span></div>
+    </div>
+    <div class="dim mono">1.8 / 3.1 GB · 57%</div>
+  </div>
+</section>
+
+<section class="slice" id="download-failed">
+  <div class="meta">
+    <h2>下载失败</h2>
+    <p>同一条区域换成错误和「重试」，不另开一页。</p>
+  </div>
+  <div class="product frame strip-frame strip" data-design="download-failed" data-source="download_strip">
+    <svg class="icon icon-20" style="color:var(--danger)"><use href="#i-warning"/></svg>
+    <div class="strip-copy" style="flex:1">
+      <div style="font-weight:500;color:var(--danger)">模型下载失败</div>
+      <div class="dim">连接下载地址失败：网络不可用。</div>
+    </div>
+    <button class="btn btn-secondary" type="button" data-design="retry-download"><svg class="icon"><use href="#i-retry"/></svg>重试</button>
+  </div>
+</section>
+
+<section class="slice" id="notice">
+  <div class="meta">
+    <h2>通知</h2>
+    <p>notice_bar。操作为什么没做成，就近出现在窗口顶部，可以关闭。</p>
+  </div>
+  <div class="product frame strip-frame notice" data-design="notice" data-source="notice_bar">
+    <svg class="icon" style="color:var(--warning)"><use href="#i-warning"/></svg>
+    <div class="dim">不能导出。没有已保存的分段。</div>
+    <button class="btn btn-quiet" type="button" data-design="dismiss-notice">关闭</button>
+  </div>
+</section>
+
+<section class="slice" id="library">
+  <div class="meta">
+    <h2>资料库</h2>
+    <p>sidebar。分组顺序是转写中、等待中、已结束。选中底色和转写进度是两套标记。文件缺失时第二行只写缺失，不再写时长。</p>
+  </div>
+  <div class="product frame sidebar sidebar-frame" data-design="library" data-source="sidebar">
+    <div class="side-head"><div class="side-title">资料库</div><div class="count">6 份录音</div></div>
+    <div class="list">
+      <div class="group"><span>转写中</span><span>1</span></div>
+      <div class="row running" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">产品讨论.m4a</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-waiting"/></svg>转写中</span><span class="extra">· 还需约 2 分钟</span></div>
+          <div class="bar" style="margin-top:4px"><span style="width:68%"></span></div>
+        </div>
+      </div>
+      <div class="group"><span>等待中</span><span>1</span></div>
+      <div class="row" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">课程录音.mp3</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14"><use href="#i-waiting"/></svg>等待中</span><span class="extra">· 40:00</span></div>
+        </div>
+      </div>
+      <div class="group"><span>已结束</span><span>4</span></div>
+      <div class="row is-selected" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--accent);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">访谈记录.wav</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra">· 40:00 · 用时 09:37</span></div>
+        </div>
+      </div>
+      <div class="row" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">这是一份包含很长文件名称与多层路径的产品讨论记录用于检查布局.m4a</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--danger)"><use href="#i-warning"/></svg>失败</span><span class="extra">· 18:05</span></div>
+        </div>
+      </div>
+      <div class="row" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">团队周会.m4a</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14" style="color:var(--accent)"><use href="#i-check"/></svg>完成</span><span class="extra" style="color:var(--warning)">· 文件缺失</span></div>
+        </div>
+      </div>
+      <div class="row" data-design="library-row">
+        <svg class="icon icon-20" style="color:var(--secondary);margin-top:1px"><use href="#i-audio"/></svg>
+        <div class="row-copy">
+          <div class="name">项目回顾.flac</div>
+          <div class="meta-line"><span class="status"><svg class="icon icon-14"><use href="#i-cancelled"/></svg>已取消</span><span class="extra">· 12:04</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="side-foot" data-design="library-footer"><svg class="icon icon-14"><use href="#i-lock"/></svg>本机转写</div>
+  </div>
+</section>
+
+<section class="slice" id="detail">
+  <div class="meta">
+    <h2>详情与操作</h2>
+    <p>detail_actions。导出是次要按钮。重新转写只在已结束时出现。窄窗口里操作会换到文件名下一行。</p>
+  </div>
+  <div class="variants">
+    <figure>
+      <figcaption>完成，操作在同一行</figcaption>
+      <div class="product frame pane pad" data-design="detail-header" data-source="detail">
+        <div class="title-row">
+          <div class="filename" data-design="filename">产品讨论.m4a</div>
+          <div class="actions" data-design="detail-actions">
+            <span class="dim">已导出</span>
+            <button class="btn btn-secondary" type="button" data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+            <button class="btn btn-secondary" type="button" data-design="rerun"><svg class="icon"><use href="#i-retry"/></svg>重新转写</button>
+            <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+        <div class="path" style="margin-top:12px">/Users/lin/录音/产品讨论.m4a</div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>窄窗口，操作换行</figcaption>
+      <div class="product frame pane narrow pad" data-design="detail-header">
+        <div class="title-row">
+          <div class="filename">这是一份包含很长文件名称的产品讨论记录.m4a</div>
+          <div class="actions">
+            <button class="btn btn-secondary" type="button" data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+            <button class="btn btn-secondary" type="button" data-design="rerun"><svg class="icon"><use href="#i-retry"/></svg>重新转写</button>
+            <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+        <div class="path" style="margin-top:12px">/Users/lin/文稿/年度计划/项目资料/产品研究/转写测试/产品讨论记录.m4a</div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>重新转写进行中，导出仍用上次结果</figcaption>
+      <div class="product frame pane pad" data-design="detail-header">
+        <div class="title-row">
+          <div class="filename">产品讨论.m4a</div>
+          <div class="actions">
+            <button class="btn btn-secondary" type="button" data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+            <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+        <div class="dim" style="margin-top:12px" data-design="export-previous">导出使用上次已保存的转写稿</div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="slice" id="more">
+  <div class="meta">
+    <h2>更多操作</h2>
+    <p>从资料库移除放在这里。确认框是系统对话框，文案是「已保存的转写稿将被移除，原录音文件会保留。」</p>
+  </div>
+  <div class="product frame menu-host" data-design="more-menu" data-source="detail_actions">
+    <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+    <div class="menu" data-design="remove-menu">
+      <button class="btn btn-quiet" type="button" data-design="remove"><svg class="icon"><use href="#i-remove"/></svg>从资料库移除</button>
+    </div>
+  </div>
+</section>
+
+<section class="slice" id="language">
+  <div class="meta">
+    <h2>语言</h2>
+    <p>language_control。只在等待中出现，顺序固定为自动、中文、英文。开始转写后改成一行文字，不再显示一个点不动的控件。</p>
+  </div>
+  <div class="variants">
+    <figure>
+      <figcaption>自动</figcaption>
+      <div class="product lang" data-design="language" data-source="language_control">
+        <div class="pill" style="left:2px"></div>
+        <button class="on" type="button">自动</button>
+        <button type="button">中文</button>
+        <button type="button">英文</button>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>中文</figcaption>
+      <div class="product lang" data-design="language">
+        <div class="pill" style="left:calc(2px + (100% - 4px) / 3)"></div>
+        <button type="button">自动</button>
+        <button class="on" type="button">中文</button>
+        <button type="button">英文</button>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>英文</figcaption>
+      <div class="product lang" data-design="language">
+        <div class="pill" style="left:calc(2px + 2 * (100% - 4px) / 3)"></div>
+        <button type="button">自动</button>
+        <button type="button">中文</button>
+        <button class="on" type="button">英文</button>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>转写开始后</figcaption>
+      <div class="product dim" style="background:transparent" data-design="language-note">自动识别语言</div>
+    </figure>
+  </div>
+</section>
+
+<section class="slice" id="progress">
+  <div class="meta">
+    <h2>转写进度</h2>
+    <p>transcription_progress。稳定后写剩余时间；前 30 秒或进度不到 3% 时只写正在估算。还没进度时写正在准备录音。</p>
+  </div>
+  <div class="variants">
+    <figure>
+      <figcaption>已能估算</figcaption>
+      <div class="product card wide" data-design="progress" data-source="transcription_progress">
+        <div class="card-top">
+          <div class="card-title">还需约 2 分钟<span class="dim" style="font-weight:400">预计 15:20 完成</span></div>
+          <button class="btn btn-secondary" type="button" data-design="cancel">取消转写</button>
+        </div>
+        <div class="meter"><div class="bar"><span style="width:68%"></span></div><span class="percent mono">68%</span></div>
+        <div class="stats">
+          <span class="stat dim">已用时 <b class="mono">04:12</b></span>
+          <span class="stat dim">已处理 <b class="mono">12:18 / 18:05</b></span>
+          <span class="stat dim">速度 <b class="mono">2.9×</b></span>
+        </div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>还在估算</figcaption>
+      <div class="product card wide" data-design="progress">
+        <div class="card-top">
+          <div class="card-title pending">正在估算剩余时间…</div>
+          <button class="btn btn-secondary" type="button" data-design="cancel">取消转写</button>
+        </div>
+        <div class="meter"><div class="bar"><span style="width:2%"></span></div><span class="percent mono">2%</span></div>
+        <div class="stats"><span class="stat dim">已用时 <b class="mono">00:12</b></span><span class="stat dim">已处理 <b class="mono">00:18 / 18:05</b></span></div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>正在准备录音</figcaption>
+      <div class="product card wide" data-design="progress">
+        <div class="card-top">
+          <div class="card-title pending">正在准备录音…</div>
+          <button class="btn btn-secondary" type="button" data-design="cancel">取消转写</button>
+        </div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="slice" id="transcript">
+  <div class="meta">
+    <h2>转写稿</h2>
+    <p>transcript。时间戳和正文共用一条对齐线。正在播放的分段用底色，时间戳变成强调色。选中的文字用选中底色。下面是五种没有正文时的句子。</p>
+  </div>
+  <div class="variants">
+    <figure>
+      <figcaption>阅读，一段正在播放，一段有选区</figcaption>
+      <div class="product frame wide" style="padding:12px 8px" data-design="transcript" data-source="transcript">
+        <div class="segment"><div class="stamp">00:00:04</div><div class="body">我们先看一下这次产品讨论的目标。</div></div>
+        <div class="segment"><div class="stamp">00:00:18</div><div class="body">界面需要更清晰，让<span class="sel">主要操作</span>自然出现。</div></div>
+        <div class="segment playing" data-design="segment-playing"><div class="stamp">00:00:36</div><div class="body">We should keep the workflow simple and predictable.</div></div>
+        <div class="segment"><div class="stamp">00:00:52</div><div class="body">语言自动判断，中文和英文都保留原文。</div></div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>没有分段时的句子</figcaption>
+      <div class="product frame stack pad" data-design="transcript-empty">
+        <div class="dim">还没有转写稿。</div>
+        <div class="dim">正在转写，分段将在这里显示。</div>
+        <div class="dim">录音中未得到可转写的文字。</div>
+        <div class="dim">已取消，没有分段。</div>
+        <div class="dim">这次转写没有保存分段。</div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="slice" id="playback">
+  <div class="meta">
+    <h2>播放</h2>
+    <p>playback_bar。只有播放和暂停，加上当前时间。没有拖动条、速度和音量。</p>
+  </div>
+  <div class="variants">
+    <figure>
+      <figcaption>正在播放</figcaption>
+      <div class="product frame wide" data-design="playback" data-source="playback_bar">
+        <div class="playback">
+          <div class="play-side">
+            <button class="play" type="button" data-design="play"><svg class="icon"><use href="#i-pause"/></svg></button>
+            <span>正在播放</span>
+            <span class="dim mono">00:41 / 18:05</span>
+          </div>
+          <span class="hint">点击分段跳转</span>
+        </div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>已暂停</figcaption>
+      <div class="product frame wide" data-design="playback">
+        <div class="playback">
+          <div class="play-side">
+            <button class="play" type="button" data-design="play"><svg class="icon"><use href="#i-play"/></svg></button>
+            <span>已暂停</span>
+            <span class="dim mono">00:41 / 18:05</span>
+          </div>
+          <span class="hint">点击分段跳转</span>
+        </div>
+      </div>
+    </figure>
+    <figure>
+      <figcaption>不能播放</figcaption>
+      <div class="product frame wide" data-design="playback">
+        <div class="playback">
+          <div class="play-side">
+            <button class="play is-disabled" type="button" disabled data-design="play"><svg class="icon"><use href="#i-play"/></svg></button>
+            <span style="color:var(--disabled)">播放</span>
+            <span class="dim">原录音文件缺失，无法播放</span>
+          </div>
+        </div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="slice" id="missing">
+  <div class="meta">
+    <h2>文件缺失</h2>
+    <p>missing_file。原状态还在，这只是附加提示。有转写稿时仍可阅读和导出。</p>
+  </div>
+  <div class="product stack" data-design="missing" data-source="missing_file">
+    <div class="alert warn"><svg class="icon icon-18" style="margin-top:1px"><use href="#i-warning"/></svg><div class="copy"><strong>找不到原录音文件</strong><div class="dim">转写稿已保留，可继续阅读和导出。</div></div></div>
+    <div class="alert warn"><svg class="icon icon-18" style="margin-top:1px"><use href="#i-warning"/></svg><div class="copy"><strong>找不到原录音文件</strong><div class="dim">空转写稿已保留，原录音文件缺失，无法播放或重新转写。</div></div></div>
+    <div class="alert warn"><svg class="icon icon-18" style="margin-top:1px"><use href="#i-warning"/></svg><div class="copy"><strong>找不到原录音文件</strong><div class="dim">无法读取原录音文件，转写和播放不可用。</div></div></div>
+  </div>
+</section>
+
+<section class="slice" id="failure">
+  <div class="meta">
+    <h2>转写失败</h2>
+    <p>failure。显示实际原因。有上次转写稿时补一句已保留，并恢复那份稿子。</p>
+  </div>
+  <div class="product alert bad wide" data-design="failure" data-source="failure">
+    <svg class="icon icon-18" style="margin-top:1px"><use href="#i-warning"/></svg>
+    <div class="copy">
+      <strong>转写失败</strong>
+      <div class="dim">无法解码录音。上次成功保存的转写稿仍然可用。<br>上次转写稿已保留。</div>
+    </div>
+  </div>
+</section>
+
+<section class="slice" id="queued">
+  <div class="meta">
+    <h2>等待中</h2>
+    <p>可以改语言。模型还没准备好时说明会自动开始。导出不可用，也没有重新转写和取消等待。</p>
+  </div>
+  <div class="product frame pane pad" data-design="queued-detail" data-source="detail">
+    <div class="title-row">
+      <div class="filename">课程录音.mp3</div>
+      <div class="actions">
+        <button class="btn is-disabled" type="button" disabled data-design="export"><svg class="icon"><use href="#i-export"/></svg>导出 Markdown</button>
+        <button class="btn btn-icon" type="button" data-design="more" aria-label="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+      </div>
+    </div>
+    <div class="path" style="margin-top:12px">/Users/lin/录音/课程录音.mp3</div>
+    <div class="info" style="margin-top:12px">
+      <span class="status"><svg class="icon icon-14"><use href="#i-waiting"/></svg><span class="dim">等待中</span></span>
+      <span class="dim">40:00</span>
+      <div class="lang" data-design="language" data-source="language_control">
+        <div class="pill" style="left:2px"></div>
+        <button class="on" type="button">自动</button>
+        <button type="button">中文</button>
+        <button type="button">英文</button>
+      </div>
+    </div>
+    <div class="dim" style="margin-top:12px" data-design="weight-waiting">模型准备完成后自动开始</div>
+  </div>
+</section>
+
+<section class="slice" id="unselected">
+  <div class="meta">
+    <h2>未选择</h2>
+    <p>资料库里有录音，但当前没有选中任何一条。</p>
+  </div>
+  <div class="product frame unselected wide" data-design="unselected" data-source="empty_detail">
+    <svg class="icon icon-40"><use href="#i-audio"/></svg>
+    <div class="dim">选择左边的一条录音</div>
+  </div>
+</section>
+
+</main>
+</div>
+<script>
+  const themeButton = document.querySelector("#theme");
+  const stored = localStorage.getItem("visper-design-board-theme");
+  if (stored === "dark") document.body.dataset.theme = "dark";
+  function labelTheme() {
+    themeButton.textContent = document.body.dataset.theme === "dark" ? "查看浅色" : "查看深色";
+  }
+  labelTheme();
+  themeButton.addEventListener("click", () => {
+    document.body.dataset.theme = document.body.dataset.theme === "dark" ? "light" : "dark";
+    if (document.body.dataset.theme === "light") delete document.body.dataset.theme;
+    localStorage.setItem("visper-design-board-theme", document.body.dataset.theme || "light");
+    labelTheme();
+  });
+  function fit() {
+    document.querySelectorAll("[data-fit]").forEach((el) => {
+      const available = el.parentElement.clientWidth;
+      const natural = Number(el.dataset.fit);
+      el.style.zoom = String(Math.min(1, available / natural));
+    });
+  }
+  addEventListener("resize", fit);
+  fit();
+</script>
+</body>
+</html>

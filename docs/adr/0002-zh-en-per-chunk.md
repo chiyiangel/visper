@@ -1,0 +1,5 @@
+# Auto mode detects Chinese or English per chunk
+
+Whisper's built-in auto language locks the whole recording to a single guess, so a later stretch in the other language gets pulled off course. In auto mode, Visper splits the recording on silence and detects each chunk as only Chinese or English, then transcribes that chunk in the detected language. English stays English and Chinese stays Chinese. Chinese text in a transcript is Simplified Chinese. Traditional characters are converted to Simplified before the text is shown or stored. Cantonese is not a language option. Those recordings are transcribed as Chinese and then simplified, with no quality guarantee. There is no translation. Forcing 中文 or 英文 locks the whole recording to that language and does not switch per chunk. Other languages are out of scope. The user cannot supply a custom prompt or vocabulary.
+
+A single whole-file auto detection was rejected because mixed recordings are part of the product. A user-written initial prompt was rejected because v1 has no custom vocabulary.

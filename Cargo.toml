@@ -1,0 +1,41 @@
+[package]
+name = "visper"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "visper"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["gui"]
+gui = ["dep:gpui", "dep:libc", "dep:ureq", "dep:whisper-rs", "dep:symphonia", "dep:rubato", "dep:rodio", "dep:cocoa"]
+
+[dependencies]
+ferrous-opencc = "0.4"
+gpui = { version = "0.2", optional = true }
+libc = { version = "0.2", optional = true }
+ureq = { version = "3", optional = true }
+whisper-rs = { version = "0.16", features = ["vulkan"], optional = true }
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3", "flac", "wav", "pcm", "adpcm"], optional = true }
+rubato = { version = "0.16", optional = true }
+rodio = { version = "0.21", default-features = false, features = ["playback", "flac", "mp3", "mp4", "wav"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The version GPUI already uses, for the Dock icon in `src/dock.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = { version = "=0.26.0", optional = true }
+
+[dev-dependencies]
+# Hit-target lookup for the menu click test.
+gpui = { version = "0.2", features = ["test-support"] }
+
+# Decoding and resampling are far too slow unoptimized: a 90-minute MP3 took
+# minutes before transcription began under `cargo run`, against ~8 s here.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
