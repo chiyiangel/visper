@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format is based on 
 - Recordings opened from Finder (Open With) or dropped on the Dock icon are added to the library, and show up in the Dock icon's recent items.
 - The standard About panel, and a window that reopens at its last size and position.
 - Quitting or closing the window while a recording is transcribing asks first, since it cancels that transcription.
+- Choose Large v3 or Large v3 Turbo from the Library footer. Turbo is faster and slightly less accurate; picking a Model that is not on disk yet downloads it, and picking back one that is abandons the download.
+- On first launch Visper asks which Model to download instead of fetching one on its own.
+- Each transcript shows the Model that produced it: a Large or Turbo tag on its row, and the full name in the info line.
+- Recordings can only be added once a Model is on disk; until then 加入录音, 选择录音, ⌘O, drops and files opened from Finder are refused.
 
 ### Changed
 
