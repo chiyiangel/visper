@@ -24,6 +24,10 @@ All notable changes to this project are documented here. The format is based on 
 - On macOS, inference runs on whisper.cpp's native Metal backend instead of Vulkan through MoltenVK, about 1.6× faster on an M3 Pro and with about 0.5 GB less memory ([ADR 0003](docs/adr/0003-metal-on-macos.md)). Building on macOS now needs only CMake; the Vulkan loader, MoltenVK, shaderc and `VULKAN_SDK` are no longer used.
 - Flash attention is on for GPU inference. Without it, the Vulkan path dropped words.
 
+### Fixed
+
+- On macOS, quitting after a model had been loaded crashed with a Metal assertion from ggml. Quitting now frees the model first.
+
 ## [0.1.0]
 
 First public version. macOS only.

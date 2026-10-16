@@ -12,6 +12,7 @@ impl visper::Downloader for Noop {
 impl visper::Transcriber for Noop {
     fn start(&mut self, _: &Path, _: visper::Language, _: visper::Model) {}
     fn cancel(&mut self) {}
+    fn shutdown(&mut self) {}
 }
 
 /// The selected Recording in every scenario.

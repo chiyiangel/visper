@@ -388,6 +388,9 @@ pub trait Transcriber {
     fn start(&mut self, path: &Path, language: Language, model: Model);
     /// Cancels the Transcription that was started last.
     fn cancel(&mut self);
+    /// Cancels it and releases everything the Transcriber holds, such as a
+    /// loaded Model, before the process exits. Nothing is started after it.
+    fn shutdown(&mut self);
 }
 
 /// The one weight being fetched, or the last fetch that failed. A switch
@@ -693,13 +696,15 @@ impl Library {
 
     /// Closing Visper: the Transcribing Recording is Cancelled as by a user
     /// cancel, Queued ones stay Queued for the next launch, and nothing new
-    /// starts.
+    /// starts. The Transcriber is shut down so it frees its Model before the
+    /// process exits, whether or not a Transcription was running.
     pub fn quit(&mut self, transcriber: &mut dyn Transcriber) {
         self.quitting = true;
         if let Some(path) = self.transcribing_path() {
             transcriber.cancel();
             self.end_without_starting_next(&path, Status::Cancelled);
         }
+        transcriber.shutdown();
     }
 
     fn transcribing_path(&self) -> Option<PathBuf> {
@@ -1793,6 +1798,7 @@ mod tests {
         started: Vec<(PathBuf, Language)>,
         models: Vec<Model>,
         cancels: usize,
+        shutdowns: usize,
     }
 
     impl Transcriber for FakeTranscriber {
@@ -1803,6 +1809,10 @@ mod tests {
 
         fn cancel(&mut self) {
             self.cancels += 1;
+        }
+
+        fn shutdown(&mut self) {
+            self.shutdowns += 1;
         }
     }
 
@@ -2700,6 +2710,26 @@ mod tests {
         assert!(library.recordings()[0].visible_segments().is_empty());
         assert_eq!(transcriber.cancels, 1);
         assert_eq!(transcriber.started, vec![(running, Language::Auto)]);
+    }
+
+    #[test]
+    fn quit_shuts_the_transcriber_down_even_when_nothing_is_transcribing() {
+        let (mut library, mut transcriber) = ready_library();
+
+        library.quit(&mut transcriber);
+
+        assert_eq!(transcriber.cancels, 0);
+        assert_eq!(transcriber.shutdowns, 1);
+    }
+
+    #[test]
+    fn quit_cancels_before_shutting_down() {
+        let (mut library, mut transcriber) = ready_library();
+        library.add(path("/Users/me/录音/一.m4a"), true, &mut transcriber);
+
+        library.quit(&mut transcriber);
+
+        assert_eq!((transcriber.cancels, transcriber.shutdowns), (1, 1));
     }
 
     #[test]

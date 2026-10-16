@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::download::weight_path;
 use rubato::{FftFixedInOut, Resampler};
@@ -54,6 +55,15 @@ pub enum TranscriptionEvent {
     },
 }
 
+/// How long `shutdown` waits for the worker to free the Model.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
+enum Message {
+    Transcribe(Request),
+    /// Drop the Model and stop; answered once it is freed.
+    Shutdown(Sender<()>),
+}
+
 struct Request {
     path: PathBuf,
     language: Language,
@@ -92,7 +102,7 @@ impl Cancel {
 /// Owns one worker thread that keeps the weight of the Model loaded between
 /// Recordings and runs one Transcription at a time.
 pub struct WhisperTranscriber {
-    requests: Sender<Request>,
+    requests: Sender<Message>,
     /// Cancels the Transcription that was started last.
     cancel: Arc<Cancel>,
 }
@@ -111,24 +121,44 @@ impl WhisperTranscriber {
 impl visper::Transcriber for WhisperTranscriber {
     fn start(&mut self, path: &Path, language: Language, model: Model) {
         self.cancel = Arc::default();
-        let _ = self.requests.send(Request {
+        let _ = self.requests.send(Message::Transcribe(Request {
             path: path.to_path_buf(),
             language,
             model,
             cancel: self.cancel.clone(),
-        });
+        }));
     }
 
     fn cancel(&mut self) {
         self.cancel.raise();
     }
+
+    /// whisper.cpp keeps the Model's Metal buffers registered until the
+    /// context is freed, and ggml asserts at process exit that none are left.
+    /// The worker only blocks waiting for requests, so it never frees the
+    /// context by itself; this makes it do so, and waits for it.
+    fn shutdown(&mut self) {
+        self.cancel.raise();
+        let (freed, released) = channel();
+        if self.requests.send(Message::Shutdown(freed)).is_ok() {
+            let _ = released.recv_timeout(SHUTDOWN_WAIT);
+        }
+    }
 }
 
-fn work(support: PathBuf, pending: Receiver<Request>, events: Sender<TranscriptionEvent>) {
+fn work(support: PathBuf, pending: Receiver<Message>, events: Sender<TranscriptionEvent>) {
     whisper_rs::install_logging_hooks();
     let mut gpu = None;
     let mut loaded = None;
-    for request in pending {
+    for message in pending {
+        let request = match message {
+            Message::Transcribe(request) => request,
+            Message::Shutdown(freed) => {
+                drop(gpu);
+                let _ = freed.send(());
+                return;
+            }
+        };
         // One weight in memory at a time: a request for the other Model
         // drops the context and loads that weight.
         if loaded != Some(request.model) {
