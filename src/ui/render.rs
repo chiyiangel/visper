@@ -531,8 +531,10 @@ impl Render for VisperWindow {
                     .flex()
                     .flex_col()
                     .bg(rgb(palette.main))
-                    .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                        style.bg(rgb(palette.playing))
+                    .when(library.can_add(), |column| {
+                        column.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                            style.bg(rgb(palette.playing))
+                        })
                     })
                     .child(pane_header(library.selected(), &view, &ui, layout, cx))
                     .children(download_strip(&library, &ui, layout, cx))
@@ -772,13 +774,22 @@ impl Render for Tooltip {
 }
 
 /// The sidebar's way to add a Recording: a row, not a button, since it sits
-/// among the Library's own rows.
-fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
+/// among the Library's own rows. Disabled until a Model is on disk.
+fn add_recording(enabled: bool, ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
     let palette = ui.palette;
     let id = SharedString::from("add-recording");
-    let level = ui.motion.hover(&id);
+    let level = if enabled { ui.motion.hover(&id) } else { 0.0 };
+    let (circle, foreground) = if enabled {
+        (
+            mix(palette.accent, palette.accent_hover, level),
+            palette.on_accent,
+        )
+    } else {
+        (palette.line, palette.disabled)
+    };
     let row = div()
         .id(id.clone())
+        .debug_selector(|| "add-recording".into())
         .w_full()
         .h(px(36.0))
         .px(px(10.0))
@@ -789,8 +800,6 @@ fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
         .text_size(px(m::LABEL_SIZE))
         .line_height(px(m::LABEL_LINE))
         .font_weight(FontWeight::MEDIUM)
-        .bg(tint(palette.ink, 0.05 * level))
-        .active(move |style| style.bg(tint(palette.ink, 0.09)))
         .child(
             div()
                 .size(px(22.0))
@@ -799,11 +808,22 @@ fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(rgb(mix(palette.accent, palette.accent_hover, level)))
-                .child(icon("plus-bold", palette.on_accent, 12.0)),
+                .bg(rgb(circle))
+                .child(icon("plus-bold", foreground, 12.0)),
         )
         .child("加入录音");
+    if !enabled {
+        return row.text_color(rgb(foreground)).tooltip(move |_, cx| {
+            cx.new(|_| Tooltip {
+                text: "模型下载完成后可以加入录音".into(),
+                palette,
+            })
+            .into()
+        });
+    }
     ui.interactive(row, &id, m::ROW_RADIUS, Ring::Inside, cx)
+        .bg(tint(palette.ink, 0.05 * level))
+        .active(move |style| style.bg(tint(palette.ink, 0.09)))
         .on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)))
 }
 
@@ -1021,7 +1041,7 @@ fn sidebar(
                 .px(px(12.0))
                 .pb(px(8.0))
                 .flex_none()
-                .child(add_recording(ui, cx)),
+                .child(add_recording(library.can_add(), ui, cx)),
         )
         .child(
             div()
@@ -1281,6 +1301,7 @@ fn detail(
         return empty_detail(
             library.is_empty(),
             library.model().is_none(),
+            library.can_add(),
             ui,
             layout,
             cx,
@@ -1802,6 +1823,7 @@ fn failure(recording: &visper::Recording, palette: Palette) -> Option<Div> {
 fn empty_detail(
     empty: bool,
     choosing: bool,
+    can_add: bool,
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
@@ -1827,13 +1849,15 @@ fn empty_detail(
         "选择录音",
         None,
         Emphasis::Primary,
-        true,
+        can_add,
         ui,
         cx,
     )
     .h(px(40.0))
     .px(px(20.0));
-    pick = pick.on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)));
+    if can_add {
+        pick = pick.on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)));
+    }
     pane.child(
         div()
             .flex_1()
@@ -1845,10 +1869,12 @@ fn empty_detail(
             .border_dashed()
             .border_color(rgb(palette.line))
             .rounded(px(8.0))
-            .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                style
-                    .border_color(rgb(palette.accent))
-                    .bg(rgb(palette.playing))
+            .when(can_add, |zone| {
+                zone.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style
+                        .border_color(rgb(palette.accent))
+                        .bg(rgb(palette.playing))
+                })
             })
             .child(
                 div()
@@ -1871,9 +1897,13 @@ fn empty_detail(
                         model_choice(ui, cx)
                     } else {
                         vec![
-                            label("拖入录音，或选择本机文件")
-                                .text_color(rgb(palette.secondary))
-                                .into_any_element(),
+                            label(if can_add {
+                                "拖入录音，或选择本机文件"
+                            } else {
+                                "模型下载完成后，拖入录音或选择本机文件"
+                            })
+                            .text_color(rgb(palette.secondary))
+                            .into_any_element(),
                             div().mt(px(8.0)).child(pick).into_any_element(),
                             div()
                                 .text_size(px(11.0))
@@ -2586,6 +2616,91 @@ mod tests {
             }
         ));
         assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn with_no_weight_on_disk_nothing_can_be_added_until_a_download_finishes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct NoDownloads;
+        impl visper::Downloader for NoDownloads {
+            fn start(&mut self, _: visper::Model) {}
+            fn abandon(&mut self, _: visper::Model) {}
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "visper-no-model-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let library_file = dir.join("library.json");
+        let recording = dir.join("会议.m4a");
+        std::fs::write(&recording, b"audio").unwrap();
+
+        let window = cx.update(|cx| {
+            open_with(cx, {
+                let store = crate::store::Store::new(library_file.clone());
+                let support = dir.clone();
+                move |cx| {
+                    let mut view = VisperWindow::new(store, support, cx);
+                    view.downloader = Box::new(NoDownloads);
+                    view
+                }
+            })
+        });
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+        let added = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |view, _| view.library.recordings().len())
+                .unwrap()
+        };
+        // The test platform has no file picker and panics if one is asked
+        // for, so a click that gets through fails this test.
+        assert!(cx.debug_bounds("add-recording").is_some());
+        click(cx, "add-recording");
+        cx.run_until_parked();
+        assert_eq!(added(cx), 0);
+
+        window
+            .update(cx, |view, _, cx| {
+                view.pick_file(cx);
+                view.open_files(vec![recording.clone()], cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(added(cx), 0);
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.notice.clone())
+                .unwrap()
+                .as_deref(),
+            Some("模型下载完成后才能加入录音")
+        );
+
+        // First download running: still no Model on disk.
+        click(cx, "first-model-large-v3");
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, cx| {
+                view.library
+                    .download_finished(visper::Model::LargeV3, &mut view.transcriber);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, cx| {
+                view.open_files(vec![recording.clone()], cx);
+            })
+            .unwrap();
+        assert_eq!(added(cx), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

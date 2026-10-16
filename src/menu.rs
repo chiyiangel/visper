@@ -61,6 +61,9 @@ pub fn install(cx: &mut App) {
             |_| {},
         )
     });
+    // Always enabled in the menu: GPUI validates a menu item by the focus path,
+    // which is lost whenever the focused control unmounts. `pick_file` does
+    // nothing until a Model is on disk.
     cx.on_action(|_: &AddRecording, cx| in_window(cx, |view, _, cx| view.pick_file(cx), |_| {}));
     cx.on_action(|_: &Export, cx| in_window(cx, |view, _, cx| view.export_selected(cx), |_| {}));
     cx.on_action(|_: &Copy, cx| in_window(cx, |view, _, cx| view.copy_selection(cx), |_| {}));

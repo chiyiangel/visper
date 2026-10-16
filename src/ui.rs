@@ -629,6 +629,7 @@ impl VisperWindow {
                 Some(format!("「{name}」已经在等待中，没有再加一条。"))
             }
             visper::AddOutcome::AlreadyTranscribing => Some(format!("「{name}」正在转写。")),
+            visper::AddOutcome::NoModelOnDisk => Some("模型下载完成后才能加入录音".into()),
             visper::AddOutcome::Rejected(reason) => Some(reason),
         };
         if self.library.selected().map(|recording| &recording.path) != previous_selection.as_ref() {
@@ -641,6 +642,9 @@ impl VisperWindow {
     }
 
     pub fn pick_file(&mut self, cx: &mut Context<Self>) {
+        if !self.library.can_add() {
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,

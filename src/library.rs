@@ -301,6 +301,8 @@ pub enum AddOutcome {
     Queued,
     AlreadyQueued,
     AlreadyTranscribing,
+    /// No Model is on disk yet, so nothing can be transcribed.
+    NoModelOnDisk,
     Rejected(String),
 }
 
@@ -449,6 +451,12 @@ impl Library {
 
     pub fn is_on_disk(&self, model: Model) -> bool {
         self.on_disk.contains(&model)
+    }
+
+    /// Whether a Recording can be added: at least one Model is on disk. Holds
+    /// while the other Model downloads.
+    pub fn can_add(&self) -> bool {
+        !self.on_disk.is_empty()
     }
 
     /// Whether the current Model's weight is on disk, so Queued Recordings
@@ -819,6 +827,9 @@ impl Library {
         can_open: bool,
         transcriber: &mut dyn Transcriber,
     ) -> AddOutcome {
+        if !self.can_add() {
+            return AddOutcome::NoModelOnDisk;
+        }
         let name = file_name(&path);
         if !is_audio(&path) {
             return AddOutcome::Rejected(format!(
@@ -957,7 +968,7 @@ mod tests {
 
     #[test]
     fn adding_an_m4a_recording_queues_it_and_selects_it() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let recording = path("/Users/me/录音/周会.m4a");
 
         let outcome = library.add(recording.clone(), true, &mut FakeTranscriber::default());
@@ -976,7 +987,7 @@ mod tests {
 
     #[test]
     fn mp3_wav_flac_and_aac_are_queued() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         for name in ["a.mp3", "b.wav", "c.flac", "d.aac", "e.M4A"] {
             let outcome = library.add(
                 path(&format!("/Users/me/录音/{name}")),
@@ -990,7 +1001,7 @@ mod tests {
 
     #[test]
     fn a_video_file_is_refused_and_stays_out_of_the_library() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
 
         let outcome = library.add(
             path("/Users/me/影片/录像.mp4"),
@@ -1009,7 +1020,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_audio_file_is_refused() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
 
         let outcome = library.add(
             path("/Users/me/录音/锁住.m4a"),
@@ -1026,7 +1037,7 @@ mod tests {
 
     #[test]
     fn the_same_file_name_in_two_folders_are_two_recordings() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         library.add(
             path("/Users/me/录音/meeting.m4a"),
             true,
@@ -1045,7 +1056,7 @@ mod tests {
 
     #[test]
     fn adding_a_queued_path_again_does_not_create_a_second_entry() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let recording = path("/Users/me/录音/周会.m4a");
         library.add(recording.clone(), true, &mut FakeTranscriber::default());
 
@@ -1061,7 +1072,7 @@ mod tests {
 
     #[test]
     fn only_one_recording_is_selected() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let first = path("/Users/me/录音/一.m4a");
         let second = path("/Users/me/录音/二.mp3");
         library.add(first.clone(), true, &mut FakeTranscriber::default());
@@ -1081,7 +1092,7 @@ mod tests {
 
     #[test]
     fn a_restored_library_keeps_recordings_and_the_selection() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let first = path("/Users/me/录音/一.wav");
         let second = path("/Users/me/录音/二.flac");
         library.add(first.clone(), true, &mut FakeTranscriber::default());
@@ -1129,6 +1140,71 @@ mod tests {
     ) {
         library.prepare(&[], downloader, transcriber);
         library.choose(model, downloader, transcriber);
+    }
+
+    /// A Library that takes Recordings but has chosen no Model, so nothing
+    /// ever starts.
+    fn accepting_library() -> Library {
+        let mut library = Library::new();
+        library.on_disk = vec![Model::LargeV3];
+        library
+    }
+
+    /// Turbo is on disk and Large v3 was chosen, so it downloads: the one way
+    /// to add Recordings that then wait for the weight.
+    fn downloading_large_v3_beside_turbo(
+        library: &mut Library,
+        downloader: &mut FakeDownloader,
+        transcriber: &mut FakeTranscriber,
+    ) {
+        library.prepare(&[Model::LargeV3Turbo], downloader, transcriber);
+        library.choose(Model::LargeV3, downloader, transcriber);
+    }
+
+    #[test]
+    fn adding_with_no_model_on_disk_is_refused_and_queues_nothing() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        let before = library.clone();
+
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(!library.can_add());
+        assert_eq!(outcome, AddOutcome::NoModelOnDisk);
+        assert_eq!(library, before);
+        assert!(library.is_empty());
+
+        // The first download running is still no Model on disk.
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut transcriber,
+        );
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(!library.can_add());
+        assert_eq!(outcome, AddOutcome::NoModelOnDisk);
+        assert!(library.is_empty());
+        assert!(transcriber.started.is_empty());
+    }
+
+    #[test]
+    fn adding_works_while_one_model_is_on_disk_and_the_other_downloads() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        library.prepare(&[Model::LargeV3], &mut downloader, &mut transcriber);
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        assert!(matches!(library.download(), Download::Running { .. }));
+
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(library.can_add());
+        assert_eq!(outcome, AddOutcome::Queued);
+        assert_eq!(library.recordings().len(), 1);
+        assert_eq!(library.recordings()[0].status, Status::Queued);
     }
 
     #[test]
@@ -1660,9 +1736,8 @@ mod tests {
     fn recordings_added_while_the_weight_downloads_or_failed_stay_queued() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        first_pick(
+        downloading_large_v3_beside_turbo(
             &mut library,
-            Model::LargeV3,
             &mut downloader,
             &mut FakeTranscriber::default(),
         );
@@ -1838,9 +1913,8 @@ mod tests {
     fn the_earliest_recording_queued_during_the_download_starts_when_it_finishes() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        first_pick(
+        downloading_large_v3_beside_turbo(
             &mut library,
-            Model::LargeV3,
             &mut FakeDownloader::default(),
             &mut transcriber,
         );
@@ -1860,7 +1934,7 @@ mod tests {
 
     #[test]
     fn a_restored_queue_starts_once_the_stored_weight_is_found() {
-        let mut queued = Library::new();
+        let mut queued = accepting_library();
         let first = path("/Users/me/录音/一.m4a");
         queued.add(first.clone(), true, &mut FakeTranscriber::default());
         queued.add(
@@ -2022,9 +2096,8 @@ mod tests {
     fn a_language_chosen_before_the_start_is_the_one_the_transcription_uses() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        first_pick(
+        downloading_large_v3_beside_turbo(
             &mut library,
-            Model::LargeV3,
             &mut FakeDownloader::default(),
             &mut transcriber,
         );
@@ -2301,7 +2374,7 @@ mod tests {
 
     #[test]
     fn a_queued_recording_without_a_transcript_cannot_play() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         library.add(
             path("/Users/me/录音/周会.m4a"),
             true,
@@ -2561,7 +2634,7 @@ mod tests {
 
     #[test]
     fn a_missing_queued_recording_waits_and_starts_once_its_file_opens_again() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let mut transcriber = FakeTranscriber::default();
         let moved = path("/Users/me/录音/移走了.m4a");
         let present = path("/Users/me/录音/还在.m4a");
@@ -2671,9 +2744,8 @@ mod tests {
     fn nothing_starts_after_quit_even_when_late_events_arrive() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        first_pick(
+        downloading_large_v3_beside_turbo(
             &mut library,
-            Model::LargeV3,
             &mut FakeDownloader::default(),
             &mut transcriber,
         );
