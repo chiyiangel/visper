@@ -544,13 +544,22 @@ fn inspect_recording(path: PathBuf) -> (PathBuf, bool) {
             .join(path)
     };
     if file_opens(&absolute) {
-        (absolute.canonicalize().unwrap_or(absolute), true)
+        // dunce keeps Windows paths as `C:\...` rather than `\\?\C:\...`.
+        (dunce::canonicalize(&absolute).unwrap_or(absolute), true)
     } else {
         (absolute, false)
     }
 }
 
+#[cfg(not(windows))]
 pub fn support_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join("Library/Application Support/Visper")
+}
+
+/// Local, not roaming: the 3 GB weight must not follow a domain account around.
+#[cfg(windows)]
+pub fn support_dir() -> PathBuf {
+    let local = std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into());
+    PathBuf::from(local).join("Visper")
 }

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows (x86_64 MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # whisper.cpp's Vulkan backend needs the SDK (headers, loader, glslc) to
+      # build, and vulkan-1.dll to load the test binaries. The action sets
+      # VULKAN_SDK, which overrides the default in .cargo/config.toml.
+      - uses: jakoch/install-vulkan-sdk-action@v1.6.0
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      # MSBuild cannot write paths over 260 characters, and whisper.cpp's
+      # shader generator build nests deep enough under target\release to cross
+      # it. A target directory next to the checkout keeps it under.
+      - name: Use a short target directory
+        shell: pwsh
+        run: echo "CARGO_TARGET_DIR=$((Resolve-Path ..).Path)\t" >> $env:GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> ../t"
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visper-windows-x86_64
+          path: ${{ env.CARGO_TARGET_DIR }}\release\visper.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The README's build dependencies. Homebrew's /opt/homebrew prefix is the
+      # VULKAN_SDK default in .cargo/config.toml.
+      - run: brew install vulkan-loader vulkan-headers molten-vk shaderc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

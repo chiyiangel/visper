@@ -6700,6 +6700,7 @@ name = "visper"
 version = "0.1.0"
 dependencies = [
  "cocoa 0.26.0",
+ "dunce",
  "ferrous-opencc",
  "gpui",
  "libc",
@@ -6710,6 +6711,7 @@ dependencies = [
  "symphonia",
  "ureq",
  "whisper-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

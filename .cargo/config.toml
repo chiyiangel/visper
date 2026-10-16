@@ -1,6 +1,7 @@
 # whisper-rs-sys needs VULKAN_SDK on macOS to link the Vulkan loader. This is
 # Homebrew's prefix on Apple Silicon (vulkan-loader, vulkan-headers, molten-vk,
 # shaderc). On an Intel Mac, or with the LunarG SDK, set VULKAN_SDK in the
-# environment; that value wins over this default.
+# environment; that value wins over this default. On Windows the LunarG SDK
+# installer sets VULKAN_SDK, so this default never applies there.
 [env]
 VULKAN_SDK = { value = "/opt/homebrew", force = false }
