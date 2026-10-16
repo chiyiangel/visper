@@ -20,7 +20,7 @@ required-features = ["gui"]
 
 [features]
 default = ["gui"]
-gui = ["dep:gpui", "dep:libc", "dep:ureq", "dep:whisper-rs", "dep:symphonia", "dep:rubato", "dep:rodio", "dep:cocoa", "dep:dunce", "dep:windows-sys"]
+gui = ["dep:gpui", "dep:libc", "dep:ureq", "dep:whisper-rs", "dep:symphonia", "dep:rubato", "dep:rodio", "dep:cocoa", "dep:objc", "dep:raw-window-handle", "dep:dunce", "dep:windows-sys"]
 
 [dependencies]
 dunce = { version = "1", optional = true }
@@ -36,9 +36,11 @@ rodio = { version = "0.21", default-features = false, features = ["playback", "f
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# The version GPUI already uses, for the Dock icon in `src/dock.rs`.
+# The versions GPUI already uses, for the AppKit calls in `src/macos.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = { version = "=0.26.0", optional = true }
+objc = { version = "0.2", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 # Inference on Metal on macOS, Vulkan elsewhere.
 whisper-rs = { version = "0.16", features = ["metal"], optional = true }
 

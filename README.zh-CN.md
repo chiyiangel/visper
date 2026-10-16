@@ -31,6 +31,7 @@ Visper 是一个用 Rust 和 [GPUI](https://www.gpui.rs/) 写的原生桌面应�
 - **分段回听。** 点击任意分段，从那里开始播放录音。
 - **导出 Markdown。** 每个分段一行 `[HH:MM:SS] 文字`。
 - **资料库。** 录音和转写稿在重启后仍在。录音文件被移走时标记为“文件缺失”，转写稿照样可读。
+- **地道的 Mac 应用。** 菜单栏和标准快捷键（⌘O 加入、⌘C 拷贝、⌘W、⌘Q），可以在访达里用“打开方式”或把录音拖到程序坞图标上加入，窗口下次打开仍在原处，正在转写时退出会先确认。
 - 浅色、深色外观跟随系统。
 
 支持的音频格式：`m4a`、`mp3`、`wav`、`flac`、`aac`。
@@ -48,7 +49,9 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 
 ## 构建与运行
 
-目前还没有预编译的发布包，需要从源码构建。### macOS
+目前还没有预编译的发布包，需要从源码构建。
+
+### macOS
 
 需要 Xcode Command Line Tools 和 [Homebrew](https://brew.sh)。
 
@@ -69,6 +72,16 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
    ```
 
 第一次构建要编译 whisper.cpp，需要几分钟。首次启动时 Visper 会从 Hugging Face（[`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)）下载模型，下载完成后才开始转写。
+
+#### Visper.app
+
+`cargo run` 启动的是一个裸可执行文件。想要一个能放进“应用程序”、带图标、支持访达“打开方式”的应用，构建应用包和磁盘映像：
+
+```bash
+scripts/bundle-macos.sh --dmg
+```
+
+产物 `Visper.app` 和 `Visper-<版本>-arm64.dmg` 在 `target/release/bundle/` 下。它使用临时（ad hoc）签名，在构建它的 Mac 上可以直接打开；在其他 Mac 上，需要先在“系统设置 → 隐私与安全性”里允许。要对外分发，把 `VISPER_SIGN_IDENTITY` 设为 Developer ID Application 证书，把 `VISPER_NOTARY_PROFILE` 设为 `xcrun notarytool store-credentials` 保存的配置名：脚本会用强化运行时签名，并对磁盘映像做公证和装订。CI 会构建同样的磁盘映像，作为 `visper-macos-arm64` artifact。
 
 ### Windows
 
@@ -105,7 +118,7 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 | `library.json` | 资料库：录音路径、状态和转写稿 |
 | `instance.sock` | 仅 macOS：防止重复启动时打开第二个窗口（Windows 上改用命名管道） |
 
-录音文件本身不会被复制。想重置 Visper，退出应用后删除这个文件夹即可。
+录音文件本身不会被复制。想重置 Visper，退出应用后删除这个文件夹即可。macOS 上窗口位置另存在用户默认设置里（`io.github.chiyiangel.visper`，用 `cargo run` 运行时是 `visper`）。
 
 ## 开发
 
@@ -135,6 +148,9 @@ cargo run -- --preview completed
 | `src/store.rs` | 读写 `library.json` |
 | `src/playback.rs` | 音频播放 |
 | `src/ui.rs`、`src/ui/` | GPUI 窗口、渲染和动效 |
+| `src/menu.rs` | 菜单栏和快捷键 |
+| `src/macos.rs` | GPUI 没有提供的 AppKit 调用：关于面板、窗口和帮助菜单、窗口位置记忆、未打包运行时的程序坞图标 |
+| `packaging/macos/`、`scripts/bundle-macos.sh` | Info.plist，以及构建 `Visper.app` 和磁盘映像的脚本 |
 | `GLOSSARY.md` | 代码和界面使用的领域术语 |
 | `docs/adr/` | 架构决策记录 |
 | `docs/design/` | 视觉与交互规范 |

@@ -7,7 +7,12 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Windows support (x86_64, MSVC): the same Vulkan inference with CPU fallback, data under `%LOCALAPPDATA%\Visper`, and one instance per user. The exe needs a GPU driver that provides `vulkan-1.dll` and the Visual C++ runtime.
-- GitHub Actions CI on Windows and macOS. The Windows job uploads `visper.exe` as an artifact.
+- GitHub Actions CI on Windows and macOS. The Windows job uploads `visper.exe` as an artifact, the macOS job a disk image.
+- `scripts/bundle-macos.sh` builds `Visper.app` and a `.dmg`: ad hoc signed by default, or signed with a Developer ID, hardened runtime and notarization when configured. The bundle is localized in Simplified Chinese and opens `m4a`, `mp3`, `wav`, `flac` and `aac` files as an alternate app.
+- A menu bar (Visper, 文件, 编辑, 窗口, 帮助) with the standard macOS shortcuts: ⌘O adds a recording, ⌘C copies the selected transcript text, ⌘W and ⌘Q quit, plus ⌘H, ⌥⌘H and ⌘M. On Windows, Ctrl+O and Ctrl+C.
+- Recordings opened from Finder (Open With) or dropped on the Dock icon are added to the library, and show up in the Dock icon's recent items.
+- The standard About panel, and a window that reopens at its last size and position.
+- Quitting or closing the window while a recording is transcribing asks first, since it cancels that transcription.
 
 ### Changed
 

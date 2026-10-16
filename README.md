@@ -31,6 +31,7 @@ It is built for meetings, lectures and interviews in **Simplified Chinese, Engli
 - **Listen back.** Click any segment to play the recording from that point.
 - **Markdown export.** One `[HH:MM:SS] text` block per segment.
 - **A library that remembers.** Recordings and transcripts persist between launches. A recording whose file has moved is marked as missing, and its transcript stays readable.
+- **A proper Mac app.** A menu bar with the standard shortcuts (⌘O to add, ⌘C to copy, ⌘W, ⌘Q), Open With in Finder and dropping recordings on the Dock icon, a window that reopens where you left it, and a question before quitting cancels a running transcription.
 - Light and dark appearance follow the system.
 
 Supported audio formats: `m4a`, `mp3`, `wav`, `flac`, `aac`.
@@ -48,7 +49,9 @@ Visper deliberately does not do live microphone capture, translation, summaries,
 
 ## Build and run
 
-There are no prebuilt releases yet, so build from source. ### macOS
+There are no prebuilt releases yet, so build from source.
+
+### macOS
 
 Needs Xcode Command Line Tools and [Homebrew](https://brew.sh).
 
@@ -69,6 +72,16 @@ Needs Xcode Command Line Tools and [Homebrew](https://brew.sh).
    ```
 
 The first build compiles whisper.cpp and takes several minutes. On first launch Visper downloads the model from Hugging Face ([`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)); transcription starts once it has finished.
+
+#### Visper.app
+
+`cargo run` starts a bare executable. For an app to keep in Applications, with its icon and Finder's Open With, build the bundle and a disk image:
+
+```bash
+scripts/bundle-macos.sh --dmg
+```
+
+This writes `Visper.app` and `Visper-<version>-arm64.dmg` to `target/release/bundle/`. It is signed ad hoc, so it opens on the Mac that built it; elsewhere macOS blocks it until it is allowed under System Settings → Privacy & Security. To hand it out, set `VISPER_SIGN_IDENTITY` to a Developer ID Application certificate and `VISPER_NOTARY_PROFILE` to a profile saved by `xcrun notarytool store-credentials`: the script then signs with the hardened runtime and notarizes and staples the disk image. CI builds the same disk image as the `visper-macos-arm64` artifact.
 
 ### Windows
 
@@ -105,7 +118,7 @@ Everything is in one folder: `~/Library/Application Support/Visper/` on macOS, `
 | `library.json` | Your library: recording paths, status and transcripts |
 | `instance.sock` | macOS only: keeps a second launch from opening a second window (Windows uses a named pipe instead) |
 
-Your audio files are never copied. To reset Visper, quit it and delete that folder.
+Your audio files are never copied. To reset Visper, quit it and delete that folder. On macOS the window's position is kept separately, in the user defaults (`io.github.chiyiangel.visper`, or `visper` when run with `cargo run`).
 
 ## Development
 
@@ -135,6 +148,9 @@ After changing the SVGs in `assets/brand/`, regenerate the app icon with `script
 | `src/store.rs` | Saving and loading `library.json` |
 | `src/playback.rs` | Audio playback |
 | `src/ui.rs`, `src/ui/` | GPUI window, rendering and motion |
+| `src/menu.rs` | Menu bar and its shortcuts |
+| `src/macos.rs` | AppKit calls GPUI does not make: About panel, Window and Help menus, saved window frame, unbundled Dock icon |
+| `packaging/macos/`, `scripts/bundle-macos.sh` | Info.plist and the script that builds `Visper.app` and the disk image |
 | `GLOSSARY.md` | Domain terms (in Chinese) used in code and UI |
 | `docs/adr/` | Architecture decision records |
 | `docs/design/` | Visual and interaction spec |

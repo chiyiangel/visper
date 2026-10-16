@@ -64,3 +64,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - run: scripts/bundle-macos.sh --dmg
+
+      # Ad hoc signed: another Mac opens it only after allowing it in
+      # System Settings → Privacy & Security.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visper-macos-arm64
+          path: target/release/bundle/Visper-*.dmg
+          retention-days: 14
+          if-no-files-found: error
