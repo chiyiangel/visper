@@ -489,6 +489,9 @@ impl Render for VisperWindow {
             focus: self.selection_focus.clone(),
             scroll: self.transcript_scroll.clone(),
         };
+        let strip = download_strip(&library, &ui, layout, cx);
+        let notice = self.notice.clone().map(|text| notice_bar(text, &ui, cx));
+        let below_bar = strip.is_some() || notice.is_some();
         div()
             .size_full()
             .flex()
@@ -548,9 +551,17 @@ impl Render for VisperWindow {
                         })
                     })
                     .child(pane_header(library.selected(), &view, &ui, layout, cx))
-                    .children(download_strip(&library, &ui, layout, cx))
-                    .children(self.notice.clone().map(|text| notice_bar(text, &ui, cx)))
-                    .child(detail(&library, &view, &ui, layout, timing.as_ref(), cx)),
+                    .children(strip)
+                    .children(notice)
+                    .child(detail(
+                        &library,
+                        &view,
+                        &ui,
+                        layout,
+                        below_bar,
+                        timing.as_ref(),
+                        cx,
+                    )),
             )
     }
 }
@@ -1121,8 +1132,9 @@ fn model_tag(model: visper::Model, palette: Palette) -> Div {
         .child(model.short_name())
 }
 
-/// The 48 px strip at the bottom of the Library: one button showing the
-/// current Model, with the Model popover hanging above it.
+/// The 48 px strip at the bottom of the Library. 本机转写 and the lock are
+/// plain text; only the current Model's name and arrow are a button, small
+/// and inset from the strip's edges, with the Model popover hanging above.
 fn model_footer(
     library: &visper::Library,
     open: bool,
@@ -1136,18 +1148,15 @@ fn model_footer(
     let button = div()
         .id(id.clone())
         .debug_selector(|| "model-footer".into())
-        .w_full()
-        .h(px(47.0))
+        .flex_none()
         .px(px(8.0))
-        .gap(px(8.0))
-        .rounded(px(m::ROW_RADIUS))
+        .py(px(6.0))
+        .gap(px(6.0))
+        .rounded(px(6.0))
         .flex()
         .items_center()
         .bg(tint(palette.ink, 0.06 * level))
-        .active(move |style| style.bg(tint(palette.ink, 0.10)))
-        .child(icon("lock", palette.secondary, 14.0))
-        .child(small("本机转写", palette).flex_none().whitespace_nowrap())
-        .child(div().flex_1())
+        .active(move |style| style.bg(tint(palette.ink, 0.11)))
         .child(
             match current {
                 Some(model) => small(model.full_name(), palette)
@@ -1161,18 +1170,33 @@ fn model_footer(
         )
         .child(icon("chevron-up", palette.secondary, 10.0));
     let button = ui
-        .interactive(button, &id, m::ROW_RADIUS, Ring::Inside, cx)
+        .interactive(button, &id, 6.0, Ring::Outside, cx)
         .on_click(cx.listener(|this, _, _, cx| {
             this.model_open = !this.model_open;
             cx.notify();
         }));
+    let row = div()
+        .h(px(47.0))
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(icon("lock", palette.secondary, 14.0))
+                .child(small("本机转写", palette).flex_none().whitespace_nowrap()),
+        )
+        .child(button);
     let mut footer = div()
         .relative()
         .flex_none()
         .w_full()
         .px(px(12.0))
         .child(div().mx(px(8.0)).h(px(1.0)).bg(rgb(palette.line)))
-        .child(button);
+        .child(row);
     if open {
         // The popover hangs above this anchor, so a press on an option is
         // outside the anchor's box; close on mouse up, as the 更多 menu does,
@@ -1306,6 +1330,7 @@ fn detail(
     view: &SelectionView,
     ui: &Ui,
     layout: Layout,
+    below_bar: bool,
     timing: Option<&Timing>,
     cx: &mut Context<VisperWindow>,
 ) -> gpui::AnyElement {
@@ -1315,6 +1340,7 @@ fn detail(
             library.is_empty(),
             library.model().is_none(),
             library.can_add(),
+            below_bar,
             ui,
             layout,
             cx,
@@ -1832,15 +1858,20 @@ fn empty_detail(
     empty: bool,
     choosing: bool,
     can_add: bool,
+    below_bar: bool,
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
 ) -> Div {
     let palette = ui.palette;
+    // The dashed zone is inset from the strip or notice bar above it by as
+    // much as from the other three edges; under the bare header (which has
+    // no line to touch) it keeps the body's usual 4 px.
     let pane = div()
         .flex_1()
         .min_h_0()
         .px(px(layout.padding))
+        .pt(px(if below_bar { layout.padding } else { 4.0 }))
         .pb(px(layout.padding))
         .flex()
         .flex_col();
