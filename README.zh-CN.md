@@ -26,7 +26,7 @@ Visper 是一个用 Rust 和 [GPUI](https://www.gpui.rs/) 写的原生桌面应�
 - **中英混杂。** “自动”模式按静音把录音切开，每一段单独判断是中文还是英文，中途换语言不会把后面带偏。也可以对整份录音固定为“中文”或“英文”。见 [ADR 0002](docs/adr/0002-zh-en-per-chunk.md)。
 - **只出简体中文。** 繁体字在显示和保存之前用 OpenCC 转成简体。
 - **完整质量的模型。** 使用未量化的 `ggml-large-v3.bin`（约 3.1 GB），首次启动时由应用自动下载并显示进度。
-- **优先用 GPU。** 推理走 Vulkan（macOS 上即 MoltenVK，Windows 上由显卡驱动提供），无法初始化 Vulkan 设备时退回 CPU。见 [ADR 0001](docs/adr/0001-whisper-cpp-vulkan.md)。
+- **优先用 GPU。** 推理在 macOS 上走 Metal，在 Windows 上走 Vulkan，GPU 无法初始化时退回 CPU。见 [ADR 0003](docs/adr/0003-metal-on-macos.md)。
 - **队列式转写。** 用文件选择器或直接拖进窗口加入录音，按顺序一次转写一份；转写过程中分段实时出现。
 - **分段回听。** 点击任意分段，从那里开始播放录音。
 - **导出 Markdown。** 每个分段一行 `[HH:MM:SS] 文字`。
@@ -41,7 +41,7 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 
 ## 环境要求
 
-- macOS（推荐 Apple Silicon；Intel 机型见下方说明），或 x86_64 的 Windows 10/11
+- macOS（推荐 Apple Silicon），或 x86_64 的 Windows 10/11
 - 约 3.1 GB 磁盘空间存放模型，以及足够加载它的内存
 - Windows 上需要提供 Vulkan 的显卡驱动（`vulkan-1.dll`，新版 NVIDIA、AMD、Intel 驱动都带）和 [Microsoft Visual C++ 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)。没有 `vulkan-1.dll` 时 Visper 无法启动。
 - 构建需要：Rust stable（`rust-toolchain.toml` 会自动安装），以及下面各平台的工具
@@ -52,10 +52,10 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 
 需要 Xcode Command Line Tools 和 [Homebrew](https://brew.sh)。
 
-1. 安装构建依赖。whisper.cpp 由 CMake 编译，它的 Vulkan 后端需要 Vulkan loader、头文件、MoltenVK 和 `glslc`（来自 shaderc）：
+1. 安装 CMake，用来编译 whisper.cpp：
 
    ```bash
-   brew install cmake vulkan-loader vulkan-headers molten-vk shaderc
+   brew install cmake
    ```
 
 2. 克隆并运行：
@@ -70,18 +70,12 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 
 第一次构建要编译 whisper.cpp，需要几分钟。首次启动时 Visper 会从 Hugging Face（[`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)）下载模型，下载完成后才开始转写。
 
-**Intel Mac 或 LunarG Vulkan SDK。** [`.cargo/config.toml`](.cargo/config.toml) 把 `VULKAN_SDK` 默认设为 Apple Silicon 上 Homebrew 的前缀 `/opt/homebrew`。自己设置这个环境变量即可覆盖，例如：
-
-```bash
-VULKAN_SDK=/usr/local cargo run --release
-```
-
 ### Windows
 
 1. 安装构建依赖：
    - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)，勾选 **使用 C++ 的桌面开发** 工作负载（MSVC 编译器和 Windows SDK）
    - [CMake](https://cmake.org/download/)
-   - [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows)。安装器会设置 `VULKAN_SDK`，覆盖 `.cargo/config.toml` 里给 macOS 的默认值；装完后请新开一个终端。
+   - [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows)。安装器会设置构建需要的 `VULKAN_SDK`；装完后请新开一个终端。
 
 2. 给 Cargo 一个短的 target 目录。MSBuild 处理不了超过 260 个字符的路径，而 whisper.cpp 的构建目录嵌套很深，target 目录路径超过大约 20 个字符就会报 `FTK1011` 或 `MSB8066`：
 

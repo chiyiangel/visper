@@ -292,11 +292,11 @@ impl Pass<'_> {
     }
 }
 
-/// ADR 0001: Vulkan (MoltenVK on macOS) when a device comes up, and the
-/// Vulkan context is kept for later Recordings. When it does not, this one
-/// Transcription runs on the CPU and the next one tries Vulkan again.
+/// ADR 0003: the GPU (Metal on macOS, Vulkan elsewhere) when it comes up,
+/// and that context is kept for later Recordings. When it does not, this one
+/// Transcription runs on the CPU and the next one tries the GPU again.
 fn whisper_state(weight: &Path, gpu: &mut Option<WhisperContext>) -> Result<WhisperState, String> {
-    if gpu.is_none() && !whisper_rs::vulkan::list_devices().is_empty() {
+    if gpu.is_none() && gpu_present() {
         *gpu = load(weight, true).ok();
     }
     if let Some(state) = gpu.as_ref().and_then(|context| context.create_state().ok()) {
@@ -311,11 +311,23 @@ fn whisper_state(weight: &Path, gpu: &mut Option<WhisperContext>) -> Result<Whis
 fn load(weight: &Path, gpu: bool) -> Result<WhisperContext, String> {
     let mut params = WhisperContextParameters::default();
     params.use_gpu(gpu);
-    // On MoltenVK the attention path without flash attention drops words;
-    // see docs/whisper-vulkan-vs-metal-bench.md.
+    // Faster on Metal, and on Vulkan the attention path without it drops
+    // words; see docs/whisper-vulkan-vs-metal-bench.md.
     params.flash_attn(gpu);
     WhisperContext::new_with_params(weight, params)
         .map_err(|error| format!("模型无法加载：{error}"))
+}
+
+/// Every Mac Visper runs on has Metal; whisper.cpp itself falls back to the
+/// CPU if its Metal device cannot be set up.
+#[cfg(target_os = "macos")]
+fn gpu_present() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gpu_present() -> bool {
+    !whisper_rs::vulkan::list_devices().is_empty()
 }
 
 /// Speech between pauses, each at most one window long, without the

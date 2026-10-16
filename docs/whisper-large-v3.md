@@ -158,7 +158,7 @@ openai-whisper 和论文第 4.5 节对齐的默认旋钮是：
 
 ## 在本仓库里
 
-Visper 把用户已经拥有的录音在本机做成转写稿。权重是完整的 `ggml-large-v3.bin`，从 `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin` 下载；whisper.cpp 的模型表把这个文件标成 2.9 GiB，ADR 0001 写大约 3 GB。推理通过 whisper-rs 调用 whisper.cpp。GPU 只有 Vulkan，macOS 上是 MoltenVK；这一次设备起不来，这一次转写就用 CPU。
+Visper 把用户已经拥有的录音在本机做成转写稿。权重是完整的 `ggml-large-v3.bin`，从 `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin` 下载；whisper.cpp 的模型表把这个文件标成 2.9 GiB，ADR 0001 写大约 3 GB。推理通过 whisper-rs 调用 whisper.cpp。GPU 在 macOS 上是 Metal，在 Windows 上是 Vulkan（ADR 0003），开启 flash attention；这一次设备起不来，这一次转写就用 CPU。
 
 自动模式下，录音按静音切开，每一段只判断为简体中文路径或英文路径，再按该语言转写。英文保持英文，中文保持中文。转写稿里的中文是简体中文，繁体在显示和保存前被转成简体。没有翻译。用户不能提供自定义 prompt 或词表，这是 ADR 0002 的产品决定，不是 Whisper 缺少 prompt 参数。实现上每个窗口调用一次解码，`set_translate(false)`，`set_language` 为 `zh` 或 `en`，`set_no_context(true)`，beam size 为 5。模型有粤语 token，本应用没有粤语选项；这类录音走中文路径再转成简体，不保证质量。
 

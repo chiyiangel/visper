@@ -9,6 +9,11 @@ All notable changes to this project are documented here. The format is based on 
 - Windows support (x86_64, MSVC): the same Vulkan inference with CPU fallback, data under `%LOCALAPPDATA%\Visper`, and one instance per user. The exe needs a GPU driver that provides `vulkan-1.dll` and the Visual C++ runtime.
 - GitHub Actions CI on Windows and macOS. The Windows job uploads `visper.exe` as an artifact.
 
+### Changed
+
+- On macOS, inference runs on whisper.cpp's native Metal backend instead of Vulkan through MoltenVK, about 1.6× faster on an M3 Pro and with about 0.5 GB less memory ([ADR 0003](docs/adr/0003-metal-on-macos.md)). Building on macOS now needs only CMake; the Vulkan loader, MoltenVK, shaderc and `VULKAN_SDK` are no longer used.
+- Flash attention is on for GPU inference. Without it, the Vulkan path dropped words.
+
 ## [0.1.0]
 
 First public version. macOS only.

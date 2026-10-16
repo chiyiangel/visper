@@ -26,7 +26,7 @@ It is built for meetings, lectures and interviews in **Simplified Chinese, Engli
 - **Mixed Chinese and English.** In *Auto* mode the recording is split on silence and every chunk is detected as Chinese or English on its own, so a switch halfway through does not drag the rest off course. You can also force 中文 or 英文 for a whole recording. See [ADR 0002](docs/adr/0002-zh-en-per-chunk.md).
 - **Simplified Chinese only.** Traditional characters are converted to Simplified (via OpenCC) before anything is shown or saved.
 - **Full-quality model.** Uses the unquantized `ggml-large-v3.bin` (about 3.1 GB), downloaded by the app with progress on first launch.
-- **GPU when available.** Inference runs on Vulkan (MoltenVK on macOS, the GPU driver on Windows) and falls back to the CPU if no Vulkan device can be set up. See [ADR 0001](docs/adr/0001-whisper-cpp-vulkan.md).
+- **GPU when available.** Inference runs on Metal on macOS and on Vulkan on Windows, and falls back to the CPU if the GPU cannot be set up. See [ADR 0003](docs/adr/0003-metal-on-macos.md).
 - **A queue, not a wizard.** Add recordings with the file picker or by dragging them onto the window; they are transcribed one at a time, in order. Segments appear live while a recording is being transcribed.
 - **Listen back.** Click any segment to play the recording from that point.
 - **Markdown export.** One `[HH:MM:SS] text` block per segment.
@@ -41,7 +41,7 @@ Visper deliberately does not do live microphone capture, translation, summaries,
 
 ## Requirements
 
-- macOS (Apple Silicon recommended; Intel works with the note below), or Windows 10/11 on x86_64
+- macOS (Apple Silicon recommended), or Windows 10/11 on x86_64
 - About 3.1 GB of free disk space for the model, plus enough memory to load it
 - On Windows, a GPU driver that provides Vulkan (`vulkan-1.dll`; current NVIDIA, AMD and Intel drivers all do) and the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist). Without `vulkan-1.dll` Visper does not start.
 - To build: Rust stable (installed automatically through `rust-toolchain.toml`), plus the platform tools below
@@ -52,10 +52,10 @@ There are no prebuilt releases yet, so build from source. ### macOS
 
 Needs Xcode Command Line Tools and [Homebrew](https://brew.sh).
 
-1. Install the build dependencies. whisper.cpp is compiled by CMake, and its Vulkan backend needs the Vulkan loader, headers, MoltenVK and `glslc` (from shaderc):
+1. Install CMake, which compiles whisper.cpp:
 
    ```bash
-   brew install cmake vulkan-loader vulkan-headers molten-vk shaderc
+   brew install cmake
    ```
 
 2. Clone and run:
@@ -70,18 +70,12 @@ Needs Xcode Command Line Tools and [Homebrew](https://brew.sh).
 
 The first build compiles whisper.cpp and takes several minutes. On first launch Visper downloads the model from Hugging Face ([`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)); transcription starts once it has finished.
 
-**Intel Macs or the LunarG Vulkan SDK.** [`.cargo/config.toml`](.cargo/config.toml) points `VULKAN_SDK` at `/opt/homebrew`, Homebrew's prefix on Apple Silicon. Set the variable yourself to override it, for example:
-
-```bash
-VULKAN_SDK=/usr/local cargo run --release
-```
-
 ### Windows
 
 1. Install the build dependencies:
    - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the **Desktop development with C++** workload (the MSVC compiler and Windows SDK)
    - [CMake](https://cmake.org/download/)
-   - The [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows). Its installer sets `VULKAN_SDK`, which overrides the macOS default in `.cargo/config.toml`; open a new terminal afterwards.
+   - The [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows). Its installer sets `VULKAN_SDK`, which the build needs; open a new terminal afterwards.
 
 2. Point Cargo at a short target directory. MSBuild cannot handle paths over 260 characters, and whisper.cpp's build nests deep enough that a target directory longer than about 20 characters fails with `FTK1011` or `MSB8066`:
 
