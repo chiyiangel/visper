@@ -127,7 +127,14 @@ impl visper::Transcriber for WhisperTranscriber {
 fn work(support: PathBuf, pending: Receiver<Request>, events: Sender<TranscriptionEvent>) {
     whisper_rs::install_logging_hooks();
     let mut gpu = None;
+    let mut loaded = None;
     for request in pending {
+        // One weight in memory at a time: a request for the other Model
+        // drops the context and loads that weight.
+        if loaded != Some(request.model) {
+            gpu = None;
+            loaded = Some(request.model);
+        }
         let weight = weight_path(&support, request.model);
         let outcome = transcribe(&weight, &mut gpu, &request, &events);
         let path = request.path.clone();

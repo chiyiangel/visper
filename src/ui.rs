@@ -31,6 +31,8 @@ pub struct VisperWindow {
     exported: Option<PathBuf>,
     /// The 更多 menu holding 从资料库移除 is open.
     more_open: bool,
+    /// The Model popover above the Library footer is open.
+    model_open: bool,
     player: Player,
     was_playing: bool,
     store: Store,
@@ -80,13 +82,11 @@ impl VisperWindow {
             for path in paths {
                 library.file_checked(&path, file_opens(&path), &mut transcriber);
             }
-            let model = visper::Model::LargeV3;
-            library.prepare_weight(
-                model,
-                weight_path(&support, model).is_file(),
-                &mut downloader,
-                &mut transcriber,
-            );
+            let on_disk: Vec<_> = visper::Model::ALL
+                .into_iter()
+                .filter(|model| weight_path(&support, *model).is_file())
+                .collect();
+            library.prepare(&on_disk, &mut downloader, &mut transcriber);
             store.save(&library);
         }
         cx.spawn(async move |this, cx| {
@@ -103,6 +103,7 @@ impl VisperWindow {
             notice: None,
             exported: None,
             more_open: false,
+            model_open: false,
             player: Player::default(),
             was_playing: false,
             store,
@@ -558,6 +559,25 @@ impl VisperWindow {
                 self.notice = Some(format!("导出失败：{error}"))
             }
         }
+        cx.notify();
+    }
+
+    /// Picks the Model later Transcriptions use, fetching its weight when it
+    /// is not stored. The popover closes either way.
+    fn choose_model(&mut self, model: visper::Model, cx: &mut Context<Self>) {
+        self.model_open = false;
+        #[cfg(debug_assertions)]
+        if self.preview {
+            self.library
+                .choose(model, &mut preview::Noop, &mut preview::Noop);
+            cx.notify();
+            return;
+        }
+        // As in `rerun`: an earlier run's events must not reach a new one.
+        self.take_events(cx);
+        self.library
+            .choose(model, &mut self.downloader, &mut self.transcriber);
+        self.store.save(&self.library);
         cx.notify();
     }
 

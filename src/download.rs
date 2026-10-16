@@ -38,16 +38,27 @@ pub fn weight_path(support: &Path, model: Model) -> PathBuf {
 pub struct WeightDownloader {
     support: PathBuf,
     events: Sender<DownloadEvent>,
+    /// Downloads started so far. One that is still running is not started
+    /// again, as two would write the same `.part` file.
+    attempts: Vec<Arc<Attempt>>,
 }
 
 impl WeightDownloader {
     pub fn new(support: PathBuf, events: Sender<DownloadEvent>) -> Self {
-        Self { support, events }
+        Self {
+            support,
+            events,
+            attempts: Vec::new(),
+        }
     }
 }
 
 impl visper::Downloader for WeightDownloader {
     fn start(&mut self, model: Model) {
+        self.attempts.retain(|attempt| !attempt.has_ended());
+        if self.attempts.iter().any(|attempt| attempt.model == model) {
+            return;
+        }
         let attempt = Arc::new(Attempt {
             model,
             target: weight_path(&self.support, model),
@@ -55,6 +66,7 @@ impl visper::Downloader for WeightDownloader {
             ended: AtomicBool::new(false),
             last_byte: Mutex::new(Instant::now()),
         });
+        self.attempts.push(attempt.clone());
         let fetching = attempt.clone();
         std::thread::spawn(move || {
             if let Err(error) = fetching.fetch() {

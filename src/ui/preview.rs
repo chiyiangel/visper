@@ -4,7 +4,7 @@ use gpui::{App, WindowAppearance, WindowHandle, px, size};
 use serde_json::json;
 use std::path::Path;
 
-struct Noop;
+pub(super) struct Noop;
 impl visper::Downloader for Noop {
     fn start(&mut self, _: visper::Model) {}
 }
@@ -46,7 +46,7 @@ fn fixture(scenario: &str) -> visper::Library {
     let path = RECORDING;
     let mut rows = Vec::new();
     if scenario != "empty" {
-        let status = if scenario == "transcribing" {
+        let status = if scenario == "transcribing" || scenario == "model-download" {
             "Queued"
         } else if scenario == "failure" {
             "Failed"
@@ -62,8 +62,8 @@ fn fixture(scenario: &str) -> visper::Library {
         }
         rows.push(json!({
             "path": path, "status": status, "language": "Auto", "duration_ms": 1_085_000,
-            "segments": if scenario == "transcribing" { Vec::new() } else { transcript },
-            "transcript_stored": scenario != "transcribing", "finished_order": 10,
+            "segments": if status == "Queued" { Vec::new() } else { transcript },
+            "transcript_stored": status != "Queued", "finished_order": 10,
             "missing": scenario == "missing", "transcription_ms": 248_000,
             "error": if scenario == "failure" { Some("无法解码录音。上次成功保存的转写稿仍然可用。") } else { None },
         }));
@@ -105,15 +105,20 @@ fn fixture(scenario: &str) -> visper::Library {
         .to_string(),
     )
     .expect("valid preview Library");
-    let mut port = Noop;
-    library.prepare_weight(
-        visper::Model::LargeV3,
-        scenario != "empty",
-        &mut port,
-        &mut Noop,
-    );
+    let on_disk = if scenario == "empty" {
+        vec![]
+    } else {
+        vec![visper::Model::LargeV3]
+    };
+    if scenario == "model-download" {
+        // Chosen before the queue starts, so the Queued Recording waits.
+        library.choose(visper::Model::LargeV3Turbo, &mut Noop, &mut Noop);
+    }
+    library.prepare(&on_disk, &mut Noop, &mut Noop);
     if scenario == "empty" {
         library.download_progressed(visper::Model::LargeV3, 1_795_000_000, 3_095_033_483);
+    } else if scenario == "model-download" {
+        library.download_progressed(visper::Model::LargeV3Turbo, 640_000_000, 1_624_555_275);
     } else if scenario == "transcribing" {
         for value in segments() {
             let segment: visper::Segment = serde_json::from_value(value).expect("preview Segment");
@@ -143,6 +148,7 @@ pub fn open_preview(scenario: &str, cx: &mut App) -> WindowHandle<VisperWindow> 
         } else {
             WindowAppearance::Light
         });
+        view.model_open = scenario == "model-popover";
         if scenario == "transcribing" {
             view.clock = Some(super::TranscriptionClock::new(
                 RECORDING.into(),
