@@ -311,6 +311,9 @@ fn whisper_state(weight: &Path, gpu: &mut Option<WhisperContext>) -> Result<Whis
 fn load(weight: &Path, gpu: bool) -> Result<WhisperContext, String> {
     let mut params = WhisperContextParameters::default();
     params.use_gpu(gpu);
+    // On MoltenVK the attention path without flash attention drops words;
+    // see docs/whisper-vulkan-vs-metal-bench.md.
+    params.flash_attn(gpu);
     WhisperContext::new_with_params(weight, params)
         .map_err(|error| format!("模型无法加载：{error}"))
 }
