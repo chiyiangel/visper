@@ -22,7 +22,7 @@ jobs:
 
       # whisper.cpp's Vulkan backend needs the SDK (headers, loader, glslc) to
       # build, and vulkan-1.dll to load the test binaries. The action sets
-      # VULKAN_SDK, which overrides the default in .cargo/config.toml.
+      # VULKAN_SDK for the build.
       - uses: jakoch/install-vulkan-sdk-action@v1.6.0
         with:
           install_runtime: true
@@ -58,12 +58,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The README's build dependencies. Homebrew's /opt/homebrew prefix is the
-      # VULKAN_SDK default in .cargo/config.toml.
-      - run: brew install vulkan-loader vulkan-headers molten-vk shaderc
-
+      # whisper.cpp builds with Metal here; CMake ships with the runner image.
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - run: scripts/bundle-macos.sh --dmg
+
+      # Ad hoc signed: another Mac opens it only after allowing it in
+      # System Settings → Privacy & Security.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visper-macos-arm64
+          path: target/release/bundle/Visper-*.dmg
+          retention-days: 14
+          if-no-files-found: error

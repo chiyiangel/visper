@@ -4,8 +4,8 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, FocusHandle, PathPromptOptions, PromptButton, PromptLevel, ScrollHandle, Subscription,
-    Timer, Window,
+    App, ClipboardItem, Context, FocusHandle, PathPromptOptions, PromptButton, PromptLevel,
+    ScrollHandle, Subscription, Timer, Window,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -269,6 +269,103 @@ impl VisperWindow {
         self.store.save(&self.library);
     }
 
+    /// 退出 Visper (⌘Q).
+    pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave(window, cx, |_, cx| cx.quit());
+    }
+
+    /// 关闭窗口 (⌘W). Visper has one window, so closing it quits.
+    pub fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave(window, cx, |window, _| window.remove_window());
+    }
+
+    /// The window's close button. Returns whether it may close right away.
+    fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.transcribing_name().is_none() {
+            self.quit();
+            return true;
+        }
+        self.request_close(window, cx);
+        false
+    }
+
+    /// Leaving cancels the running Transcription, so while one runs it asks
+    /// first, as a sheet on the window. Otherwise it leaves at once.
+    fn leave(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        leave: impl FnOnce(&mut Window, &mut App) + 'static,
+    ) {
+        let Some(name) = self.transcribing_name() else {
+            self.quit();
+            leave(window, cx);
+            return;
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "正在转写，要退出 Visper 吗？",
+            Some(&format!(
+                "「{name}」的转写会被取消。等待中的录音会在下次打开时继续。"
+            )),
+            &[
+                PromptButton::Ok("退出".into()),
+                PromptButton::Cancel("继续转写".into()),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(0) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.quit();
+                    leave(window, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn transcribing_name(&self) -> Option<String> {
+        self.library
+            .recordings()
+            .iter()
+            .find(|recording| recording.status == visper::Status::Transcribing)
+            .map(|recording| recording.file_name())
+    }
+
+    /// 拷贝 (⌘C): the selected transcript text, if any is selected.
+    pub fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(recording) = self.library.selected() else {
+            return;
+        };
+        let text = self.selection.borrow().text(recording.visible_segments());
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// 导出 Markdown… in the menu bar, for the selected Recording.
+    pub fn export_selected(&mut self, cx: &mut Context<Self>) {
+        match self.library.selected() {
+            Some(recording) if recording.can_export() => {
+                let path = recording.path.clone();
+                self.export(&path, cx);
+            }
+            Some(_) => {
+                self.notice = Some("不能导出。没有已保存的分段。".into());
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// Recordings handed over by Finder or the Dock.
+    pub fn open_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for path in paths {
+            self.admit(path, cx);
+        }
+    }
+
     fn select(&mut self, path: &Path, cx: &mut Context<Self>) {
         if self
             .library
@@ -469,7 +566,14 @@ impl VisperWindow {
         let (path, can_open) = inspect_recording(path);
         // As in `rerun`: an earlier run's events must not reach a new one.
         self.take_events(cx);
-        self.notice = match self.library.add(path, can_open, &mut self.transcriber) {
+        let outcome = self
+            .library
+            .add(path.clone(), can_open, &mut self.transcriber);
+        if outcome == visper::AddOutcome::Queued {
+            // Listed under the Dock icon's recent items.
+            cx.add_recent_document(&path);
+        }
+        self.notice = match outcome {
             visper::AddOutcome::Queued => None,
             visper::AddOutcome::AlreadyQueued => {
                 Some(format!("「{name}」已经在等待中，没有再加一条。"))
@@ -486,7 +590,7 @@ impl VisperWindow {
         cx.notify();
     }
 
-    fn pick_file(&mut self, cx: &mut Context<Self>) {
+    pub fn pick_file(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,

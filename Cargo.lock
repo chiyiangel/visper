@@ -6704,6 +6704,8 @@ dependencies = [
  "ferrous-opencc",
  "gpui",
  "libc",
+ "objc",
+ "raw-window-handle",
  "rodio",
  "rubato",
  "serde",

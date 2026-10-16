@@ -3,11 +3,10 @@ use super::{PlaybackState, Store, VisperWindow};
 use crate::theme::{Palette, metrics as m, mix, tint};
 use gpui::prelude::*;
 use gpui::{
-    Animation, AnimationExt, App, Bounds, ClipboardItem, Context, Div, ExternalPaths, FontWeight,
-    HighlightStyle, IntoElement, MouseButton, ParentElement, Pixels, Point, Render, SharedString,
-    Stateful, Styled, StyledText, Svg, TitlebarOptions, Window, WindowBounds, WindowControlArea,
-    WindowHandle, WindowOptions, deferred, div, ease_in_out, ease_out_quint, point, px, rgb, size,
-    svg,
+    Animation, AnimationExt, App, Bounds, Context, Div, ExternalPaths, FontWeight, HighlightStyle,
+    IntoElement, MouseButton, ParentElement, Pixels, Point, Render, SharedString, Stateful, Styled,
+    StyledText, Svg, TitlebarOptions, Window, WindowBounds, WindowControlArea, WindowHandle,
+    WindowOptions, deferred, div, ease_in_out, ease_out_quint, point, px, rgb, size, svg,
 };
 use std::ops::Range;
 use std::time::Duration;
@@ -435,7 +434,7 @@ impl TextSelection {
         (from < to).then_some(from..to)
     }
 
-    fn text(&self, segments: &[visper::Segment]) -> String {
+    pub(super) fn text(&self, segments: &[visper::Segment]) -> String {
         segments
             .iter()
             .enumerate()
@@ -497,15 +496,6 @@ impl Render for VisperWindow {
                     }
                     window.prevent_default();
                     cx.stop_propagation();
-                } else if stroke.key == "c"
-                    && stroke.modifiers.platform
-                    && let Some(recording) = this.library.selected()
-                {
-                    let text = this.selection.borrow().text(recording.visible_segments());
-                    if !text.is_empty() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        cx.stop_propagation();
-                    }
                 }
             }))
             .capture_any_mouse_down(move |_, window, _| {
@@ -1866,9 +1856,10 @@ pub(super) fn open_with(
                 });
                 view.update(cx, |this, _| this.appearance = Some(subscription));
                 let closing = view.downgrade();
-                window.on_window_should_close(cx, move |_, cx| {
-                    let _ = closing.update(cx, |this, _| this.quit());
-                    true
+                window.on_window_should_close(cx, move |window, cx| {
+                    closing
+                        .update(cx, |this, cx| this.should_close(window, cx))
+                        .unwrap_or(true)
                 });
                 view
             },
