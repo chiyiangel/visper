@@ -1,0 +1,9 @@
+# The user picks large-v3 or large-v3-turbo
+
+This partly supersedes [ADR 0001](0001-whisper-cpp-vulkan.md), which rejected the turbo weight because it gives up full large-v3 quality. Speed now counts too: some Recordings (a weekly meeting) are worth a faster, slightly less accurate Transcript, and others (an interview full of names) are not. So Visper offers exactly two Models, `ggml-large-v3.bin` (about 3.1 GB) and `ggml-large-v3-turbo.bin` (about 1.6 GB). Turbo is large-v3 with its decoder cut from 32 to 4 layers. Quantized weights and the smaller Whisper sizes are still out.
+
+The choice is one setting for the whole app, not one per Recording. It applies to each Transcription that starts after the change. A per-Recording choice was rejected: a queue that mixes both would reload a multi-GB weight between Recordings, and it adds a second control to every Queued Recording. Each Transcript records which Model produced it, so a faster Transcript can still be told apart later.
+
+On first launch the user picks the Model before anything downloads, instead of getting large-v3 automatically. Recordings cannot be added until at least one Model is on disk. This reverses the old rule that a Recording could be added while the first download ran: with a choice to make first, letting Recordings pile up before any Model exists would leave a queue with nothing to run it and a second place to ask for the choice. Both weights stay on disk once downloaded. There is no in-app way to delete one.
+
+Switching to a Model that is not on disk starts its download, and Queued Recordings wait for it rather than run on the previous Model, so the Model shown is always the one that transcribes next. A Transcription already running finishes on the Model it started with. Transcripts stored before this change have no recorded Model and count as large-v3, the only weight there was.
