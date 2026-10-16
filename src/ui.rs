@@ -14,6 +14,7 @@ mod motion;
 #[cfg(debug_assertions)]
 mod preview;
 mod render;
+mod scrollbar;
 #[cfg(debug_assertions)]
 pub use preview::open_preview;
 pub use render::open;
@@ -44,6 +45,9 @@ pub struct VisperWindow {
     selection: Rc<RefCell<render::TextSelection>>,
     selection_focus: FocusHandle,
     transcript_scroll: ScrollHandle,
+    transcript_bar: scrollbar::Scrollbar,
+    library_scroll: ScrollHandle,
+    library_bar: scrollbar::Scrollbar,
     motion: motion::Motion,
     clock: Option<TranscriptionClock>,
     #[cfg(debug_assertions)]
@@ -115,6 +119,9 @@ impl VisperWindow {
             selection: Rc::default(),
             selection_focus: cx.focus_handle(),
             transcript_scroll: ScrollHandle::new(),
+            transcript_bar: scrollbar::Scrollbar::new("transcript-scrollbar"),
+            library_scroll: ScrollHandle::new(),
+            library_bar: scrollbar::Scrollbar::new("library-scrollbar"),
             motion: motion::Motion::default(),
             clock: None,
             #[cfg(debug_assertions)]

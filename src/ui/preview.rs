@@ -1,6 +1,6 @@
 //! Isolated debug-only scenarios for visual review. No model download or user Library.
 use super::{PlaybackState, Store, VisperWindow, render};
-use gpui::{App, WindowAppearance, WindowHandle, px, size};
+use gpui::{App, WindowAppearance, WindowHandle, point, px, size};
 use serde_json::json;
 use std::path::Path;
 
@@ -165,6 +165,16 @@ pub fn open_preview(scenario: &str, cx: &mut App) -> WindowHandle<VisperWindow> 
             WindowAppearance::Light
         });
         view.model_open = scenario == "model-popover";
+        if scenario == "long" {
+            // Both lists part-way down, with their bars on show; the
+            // VISPER_PREVIEW_BAR=hot variant draws them as if hovered.
+            view.transcript_scroll
+                .set_offset(point(px(0.0), px(-6_000.0)));
+            view.library_scroll.set_offset(point(px(0.0), px(-1_200.0)));
+            let hot = std::env::var("VISPER_PREVIEW_BAR").is_ok_and(|bar| bar == "hot");
+            view.transcript_bar.pin(hot);
+            view.library_bar.pin(hot);
+        }
         if scenario == "transcribing" {
             view.clock = Some(super::TranscriptionClock::new(
                 RECORDING.into(),

@@ -1,4 +1,5 @@
 use super::motion::Motion;
+use super::scrollbar::Scrollbar;
 use super::{PlaybackState, Store, VisperWindow};
 use crate::theme::{Palette, metrics as m, mix, tint};
 use gpui::prelude::*;
@@ -488,6 +489,12 @@ impl Render for VisperWindow {
             selection: self.selection.clone(),
             focus: self.selection_focus.clone(),
             scroll: self.transcript_scroll.clone(),
+            bar: self.transcript_bar.clone(),
+        };
+        let library_view = LibraryView {
+            model_open,
+            scroll: self.library_scroll.clone(),
+            bar: self.library_bar.clone(),
         };
         let strip = download_strip(&library, &ui, layout, cx);
         let notice = self.notice.clone().map(|text| notice_bar(text, &ui, cx));
@@ -531,7 +538,7 @@ impl Render for VisperWindow {
             .child(sidebar(
                 &library,
                 window,
-                model_open,
+                &library_view,
                 &ui,
                 layout,
                 timing.as_ref(),
@@ -881,7 +888,7 @@ const ROW_COPY_INSET: f32 = 24.0 + 24.0 + 20.0 + 10.0 + 1.0;
 fn sidebar(
     library: &visper::Library,
     window: &Window,
-    model_open: bool,
+    view: &LibraryView,
     ui: &Ui,
     layout: Layout,
     timing: Option<&Timing>,
@@ -1076,8 +1083,8 @@ fn sidebar(
                         .text_color(rgb(palette.tertiary)),
                 ),
         )
-        .child(list)
-        .child(model_footer(library, model_open, ui, cx))
+        .child(view.bar.wrap(list, &view.scroll, palette))
+        .child(model_footer(library, view.model_open, ui, cx))
 }
 
 /// The Model on each line of the popover.
@@ -1316,6 +1323,13 @@ fn model_popover(library: &visper::Library, ui: &Ui, cx: &mut Context<VisperWind
     )
 }
 
+/// What the Library column draws besides the Library itself.
+struct LibraryView {
+    model_open: bool,
+    scroll: gpui::ScrollHandle,
+    bar: Scrollbar,
+}
+
 struct SelectionView {
     just_exported: bool,
     more_open: bool,
@@ -1323,6 +1337,7 @@ struct SelectionView {
     selection: std::rc::Rc<std::cell::RefCell<TextSelection>>,
     focus: gpui::FocusHandle,
     scroll: gpui::ScrollHandle,
+    bar: Scrollbar,
 }
 
 fn detail(
@@ -2057,7 +2072,7 @@ fn transcript(
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
-) -> Stateful<Div> {
+) -> Div {
     let palette = ui.palette;
     let playing_segment = view
         .playback
@@ -2065,7 +2080,6 @@ fn transcript(
     let segments = recording.visible_segments();
     let selection = view.selection.clone();
     let focus = view.focus.clone();
-    let scroll = view.scroll.clone();
     let mut content = div()
         .max_w(px(m::READING_WIDTH))
         .w_full()
@@ -2217,13 +2231,13 @@ fn transcript(
                 .child(small("正在转写后续内容…", palette)),
         );
     }
-    div()
+    let area = div()
         .id("transcript")
+        .debug_selector(|| "transcript".into())
         .flex_1()
         .min_h_0()
         .px(px(layout.padding))
         .overflow_y_scroll()
-        .track_scroll(&scroll)
         .track_focus(&focus)
         .on_mouse_up(
             MouseButton::Left,
@@ -2233,7 +2247,8 @@ fn transcript(
             MouseButton::Left,
             cx.listener(|this, _, _, _| this.selection.borrow_mut().selecting = false),
         )
-        .child(content)
+        .child(content);
+    view.bar.wrap(area, &view.scroll, palette)
 }
 
 fn playback_bar(

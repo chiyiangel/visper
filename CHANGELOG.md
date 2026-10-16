@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format is based on 
 - Choose Large v3 or Large v3 Turbo from the Library footer. Turbo is faster and slightly less accurate; picking a Model that is not on disk yet downloads it, and picking back one that is abandons the download.
 - On first launch Visper asks which Model to download instead of fetching one on its own.
 - Each transcript shows the Model that produced it: a Large or Turbo tag on its row, and the full name in the info line.
+- A scrollbar on the Transcript and on the Library list: a thin overlay thumb that shows while scrolling or hovering, fades out after a second, can be dragged, and pages when the track is clicked. It honours Reduce motion.
 - Recordings can only be added once a Model is on disk; until then 加入录音, 选择录音, ⌘O, drops and files opened from Finder are refused.
 
 ### Changed
