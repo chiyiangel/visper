@@ -18,7 +18,7 @@ mod render;
 pub use preview::open_preview;
 pub use render::open;
 
-use crate::download::{DownloadEvent, WeightDownloader};
+use crate::download::{DownloadEvent, WeightDownloader, weight_path};
 use crate::markdown::MarkdownFile;
 use crate::playback::{PlaybackState, Player};
 use crate::store::Store;
@@ -55,22 +55,22 @@ pub struct VisperWindow {
 }
 
 impl VisperWindow {
-    pub fn new(store: Store, weight: PathBuf, cx: &mut Context<Self>) -> Self {
-        Self::build(store, weight, None, cx)
+    pub fn new(store: Store, support: PathBuf, cx: &mut Context<Self>) -> Self {
+        Self::build(store, support, None, cx)
     }
 
     fn build(
         mut store: Store,
-        weight: PathBuf,
+        support: PathBuf,
         preview_library: Option<visper::Library>,
         cx: &mut Context<Self>,
     ) -> Self {
         let preview = preview_library.is_some();
         let mut library = preview_library.unwrap_or_else(|| store.load());
         let (sender, download_events) = channel();
-        let mut downloader = WeightDownloader::new(weight.clone(), sender);
+        let mut downloader = WeightDownloader::new(support.clone(), sender);
         let (sender, transcription_events) = channel();
-        let mut transcriber = WhisperTranscriber::new(weight.clone(), sender);
+        let mut transcriber = WhisperTranscriber::new(support.clone(), sender);
         let paths: Vec<PathBuf> = library
             .recordings()
             .iter()
@@ -80,7 +80,13 @@ impl VisperWindow {
             for path in paths {
                 library.file_checked(&path, file_opens(&path), &mut transcriber);
             }
-            library.prepare_weight(weight.is_file(), &mut downloader, &mut transcriber);
+            let model = visper::Model::LargeV3;
+            library.prepare_weight(
+                model,
+                weight_path(&support, model).is_file(),
+                &mut downloader,
+                &mut transcriber,
+            );
             store.save(&library);
         }
         cx.spawn(async move |this, cx| {
@@ -132,11 +138,17 @@ impl VisperWindow {
         while let Ok(event) = self.download_events.try_recv() {
             changed = true;
             match event {
-                DownloadEvent::Progressed { received, total } => {
-                    self.library.download_progressed(received, total)
+                DownloadEvent::Progressed {
+                    model,
+                    received,
+                    total,
+                } => self.library.download_progressed(model, received, total),
+                DownloadEvent::Failed { model, error } => {
+                    self.library.download_failed(model, error)
                 }
-                DownloadEvent::Failed(error) => self.library.download_failed(error),
-                DownloadEvent::Finished => self.library.download_finished(&mut self.transcriber),
+                DownloadEvent::Finished { model } => {
+                    self.library.download_finished(model, &mut self.transcriber)
+                }
             }
         }
         while let Ok(event) = self.transcription_events.try_recv() {

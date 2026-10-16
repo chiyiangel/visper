@@ -6,42 +6,51 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const WEIGHT_FILE: &str = "ggml-large-v3.bin";
+use visper::Model;
+
 const WEIGHT_REPOSITORY: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
-/// Approximate size of the weight, shown only when the server sends no length.
-const WEIGHT_BYTES: u64 = 3_095_033_483;
 const REPORT_EVERY: Duration = Duration::from_millis(100);
 /// ureq has no idle-read timeout, so a watchdog fails a download that stops
 /// delivering bytes; otherwise it would sit in 下载中 with no 重试.
 const STALL_AFTER: Duration = Duration::from_secs(60);
 
 pub enum DownloadEvent {
-    Progressed { received: u64, total: u64 },
-    Failed(String),
-    Finished,
+    Progressed {
+        model: Model,
+        received: u64,
+        total: u64,
+    },
+    Failed {
+        model: Model,
+        error: String,
+    },
+    Finished {
+        model: Model,
+    },
 }
 
-pub fn weight_path(support: &Path) -> PathBuf {
-    support.join(WEIGHT_FILE)
+pub fn weight_path(support: &Path, model: Model) -> PathBuf {
+    support.join(model.weight_file())
 }
 
 /// Downloads into a `.part` file and renames it only once every byte has
 /// arrived, so a half-written weight never looks stored.
 pub struct WeightDownloader {
-    target: PathBuf,
+    support: PathBuf,
     events: Sender<DownloadEvent>,
 }
 
 impl WeightDownloader {
-    pub fn new(target: PathBuf, events: Sender<DownloadEvent>) -> Self {
-        Self { target, events }
+    pub fn new(support: PathBuf, events: Sender<DownloadEvent>) -> Self {
+        Self { support, events }
     }
 }
 
 impl visper::Downloader for WeightDownloader {
-    fn start(&mut self) {
+    fn start(&mut self, model: Model) {
         let attempt = Arc::new(Attempt {
-            target: self.target.clone(),
+            model,
+            target: weight_path(&self.support, model),
             events: self.events.clone(),
             ended: AtomicBool::new(false),
             last_byte: Mutex::new(Instant::now()),
@@ -49,17 +58,17 @@ impl visper::Downloader for WeightDownloader {
         let fetching = attempt.clone();
         std::thread::spawn(move || {
             if let Err(error) = fetching.fetch() {
-                fetching.end(DownloadEvent::Failed(error));
+                fetching.end(DownloadEvent::Failed { model, error });
             }
         });
         std::thread::spawn(move || {
             while !attempt.has_ended() {
                 std::thread::sleep(Duration::from_secs(5));
                 if attempt.idle() >= STALL_AFTER {
-                    attempt.end(DownloadEvent::Failed(format!(
-                        "超过 {} 秒没有收到数据。",
-                        STALL_AFTER.as_secs()
-                    )));
+                    attempt.end(DownloadEvent::Failed {
+                        model,
+                        error: format!("超过 {} 秒没有收到数据。", STALL_AFTER.as_secs()),
+                    });
                 }
             }
         });
@@ -69,6 +78,7 @@ impl visper::Downloader for WeightDownloader {
 /// One run of the download. Whoever ends it first (the fetch or the stall
 /// watchdog) sends the only terminal event; an abandoned fetch stops writing.
 struct Attempt {
+    model: Model,
     target: PathBuf,
     events: Sender<DownloadEvent>,
     ended: AtomicBool,
@@ -80,7 +90,7 @@ impl Attempt {
         if self.ended.swap(true, Ordering::SeqCst) {
             return false;
         }
-        if let DownloadEvent::Failed(_) = event {
+        if let DownloadEvent::Failed { .. } = event {
             let _ = fs::remove_file(self.partial());
         }
         let _ = self.events.send(event);
@@ -118,7 +128,7 @@ impl Attempt {
             .build()
             .new_agent();
         let response = agent
-            .get(format!("{WEIGHT_REPOSITORY}/{WEIGHT_FILE}"))
+            .get(format!("{WEIGHT_REPOSITORY}/{}", self.model.weight_file()))
             .call()
             .map_err(|error| format!("连接下载地址失败：{error}"))?;
         let expected = response.body().content_length();
@@ -131,10 +141,12 @@ impl Attempt {
         let mut received = 0;
         let mut reported = Instant::now();
         let report = |received: u64| {
-            let total = expected.unwrap_or(WEIGHT_BYTES).max(received);
-            let _ = self
-                .events
-                .send(DownloadEvent::Progressed { received, total });
+            let total = expected.unwrap_or(self.model.bytes()).max(received);
+            let _ = self.events.send(DownloadEvent::Progressed {
+                model: self.model,
+                received,
+                total,
+            });
         };
         report(0);
         loop {
@@ -173,7 +185,7 @@ impl Attempt {
         }
         fs::rename(self.partial(), &self.target)
             .map_err(|error| format!("保存模型失败：{error}"))?;
-        self.end(DownloadEvent::Finished);
+        self.end(DownloadEvent::Finished { model: self.model });
         Ok(())
     }
 }

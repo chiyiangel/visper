@@ -50,7 +50,7 @@ fn main() {
         menu::install(cx);
         let window = ui::open(
             store::Store::new(store::library_path(&support)),
-            download::weight_path(&support),
+            support,
             cx,
         );
         // Not in previews, which would share and overwrite the saved frame.

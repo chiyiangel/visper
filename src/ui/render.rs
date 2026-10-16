@@ -577,7 +577,9 @@ fn download_strip(
         .border_b_1()
         .border_color(rgb(palette.line));
     match weight {
-        visper::Weight::Downloading { received, total } => {
+        visper::Weight::Downloading {
+            received, total, ..
+        } => {
             let fraction = if *total > 0 {
                 *received as f32 / *total as f32
             } else {
@@ -629,7 +631,7 @@ fn download_strip(
                     .child(small(amount, palette).flex_none().font_family(m::MONO_FONT)),
             )
         }
-        visper::Weight::Failed(error) => Some(
+        visper::Weight::Failed { error, .. } => Some(
             strip
                 .child(icon("warning", palette.danger, 20.0))
                 .child(
@@ -659,7 +661,7 @@ fn download_strip(
                     .on_click(cx.listener(|this, _, _, cx| this.retry_download(cx))),
                 ),
         ),
-        visper::Weight::Absent | visper::Weight::Ready => None,
+        visper::Weight::Absent | visper::Weight::Ready(_) => None,
     }
 }
 
@@ -1015,8 +1017,8 @@ fn detail(
         .children(failure(recording, palette))
         .children(
             (recording.status == visper::Status::Queued
-                && library.weight() != &visper::Weight::Ready)
-                .then(|| small("模型准备完成后自动开始", palette)),
+                && !matches!(library.weight(), visper::Weight::Ready(_)))
+            .then(|| small("模型准备完成后自动开始", palette)),
         )
         .children(
             (recording.status == visper::Status::Transcribing)
@@ -1826,8 +1828,8 @@ fn duration_label(ms: u64) -> String {
     time_label(ms, ms >= 3_600_000)
 }
 
-pub fn open(store: Store, weight: std::path::PathBuf, cx: &mut App) -> WindowHandle<VisperWindow> {
-    open_with(cx, move |cx| VisperWindow::new(store, weight, cx))
+pub fn open(store: Store, support: std::path::PathBuf, cx: &mut App) -> WindowHandle<VisperWindow> {
+    open_with(cx, move |cx| VisperWindow::new(store, support, cx))
 }
 
 pub(super) fn open_with(
@@ -1982,12 +1984,16 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        std::fs::write(dir.join("weight.bin"), b"weight").unwrap();
+        std::fs::write(
+            crate::download::weight_path(&dir, visper::Model::LargeV3),
+            b"weight",
+        )
+        .unwrap();
 
         let window = cx.update(|cx| {
             open(
                 crate::store::Store::new(library_file.clone()),
-                dir.join("weight.bin"),
+                dir.clone(),
                 cx,
             )
         });

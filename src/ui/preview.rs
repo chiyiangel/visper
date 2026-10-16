@@ -6,10 +6,10 @@ use std::path::Path;
 
 struct Noop;
 impl visper::Downloader for Noop {
-    fn start(&mut self) {}
+    fn start(&mut self, _: visper::Model) {}
 }
 impl visper::Transcriber for Noop {
-    fn start(&mut self, _: &Path, _: visper::Language) {}
+    fn start(&mut self, _: &Path, _: visper::Language, _: visper::Model) {}
     fn cancel(&mut self) {}
 }
 
@@ -106,9 +106,14 @@ fn fixture(scenario: &str) -> visper::Library {
     )
     .expect("valid preview Library");
     let mut port = Noop;
-    library.prepare_weight(scenario != "empty", &mut port, &mut Noop);
+    library.prepare_weight(
+        visper::Model::LargeV3,
+        scenario != "empty",
+        &mut port,
+        &mut Noop,
+    );
     if scenario == "empty" {
-        library.download_progressed(1_795_000_000, 3_095_033_483);
+        library.download_progressed(visper::Model::LargeV3, 1_795_000_000, 3_095_033_483);
     } else if scenario == "transcribing" {
         for value in segments() {
             let segment: visper::Segment = serde_json::from_value(value).expect("preview Segment");
@@ -129,7 +134,7 @@ pub fn open_preview(scenario: &str, cx: &mut App) -> WindowHandle<VisperWindow> 
     let window = render::open_with(cx, move |cx| {
         let mut view = VisperWindow::build(
             store,
-            std::env::temp_dir().join("visper-preview-no-model.bin"),
+            std::env::temp_dir().join("visper-preview-no-model"),
             Some(library),
             cx,
         );

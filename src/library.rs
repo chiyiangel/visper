@@ -284,10 +284,46 @@ pub enum AddOutcome {
     Rejected(String),
 }
 
-/// Fetches the Whisper weight in the background and reports back through
+/// A Whisper model Visper can transcribe with (ADR 0004). Each one is a
+/// weight file that is downloaded once and then kept on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model {
+    LargeV3,
+}
+
+impl Model {
+    pub fn full_name(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "Large v3",
+        }
+    }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "Large",
+        }
+    }
+
+    /// The weight's file name, both on disk and in the download repository.
+    pub fn weight_file(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "ggml-large-v3.bin",
+        }
+    }
+
+    /// Approximate size of the weight in bytes, for when the server sends
+    /// no length.
+    pub fn bytes(self) -> u64 {
+        match self {
+            Model::LargeV3 => 3_095_033_483,
+        }
+    }
+}
+
+/// Fetches the weight of a Model in the background and reports back through
 /// the `download_*` actions on [`Library`].
 pub trait Downloader {
-    fn start(&mut self);
+    fn start(&mut self, model: Model);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,7 +352,7 @@ pub enum ExportOutcome {
 /// Runs one Transcription in the background and reports back through the
 /// `transcription_*` actions on [`Library`].
 pub trait Transcriber {
-    fn start(&mut self, path: &Path, language: Language);
+    fn start(&mut self, path: &Path, language: Language, model: Model);
     /// Cancels the Transcription that was started last.
     fn cancel(&mut self);
 }
@@ -327,11 +363,15 @@ pub enum Weight {
     #[default]
     Absent,
     Downloading {
+        model: Model,
         received: u64,
         total: u64,
     },
-    Failed(String),
-    Ready,
+    Failed {
+        model: Model,
+        error: String,
+    },
+    Ready(Model),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,49 +404,55 @@ impl Library {
 
     pub fn prepare_weight(
         &mut self,
+        model: Model,
         stored: bool,
         downloader: &mut dyn Downloader,
         transcriber: &mut dyn Transcriber,
     ) {
         if stored {
-            self.weight = Weight::Ready;
+            self.weight = Weight::Ready(model);
             self.start_next(transcriber);
         } else {
-            self.start_download(downloader);
+            self.start_download(model, downloader);
         }
     }
 
-    pub fn download_progressed(&mut self, received: u64, total: u64) {
-        if self.is_downloading() {
-            self.weight = Weight::Downloading { received, total };
+    pub fn download_progressed(&mut self, model: Model, received: u64, total: u64) {
+        if self.is_downloading(model) {
+            self.weight = Weight::Downloading {
+                model,
+                received,
+                total,
+            };
         }
     }
 
-    pub fn download_failed(&mut self, error: String) {
-        if self.is_downloading() {
-            self.weight = Weight::Failed(error);
+    pub fn download_failed(&mut self, model: Model, error: String) {
+        if self.is_downloading(model) {
+            self.weight = Weight::Failed { model, error };
         }
     }
 
-    pub fn download_finished(&mut self, transcriber: &mut dyn Transcriber) {
-        if self.is_downloading() {
-            self.weight = Weight::Ready;
+    pub fn download_finished(&mut self, model: Model, transcriber: &mut dyn Transcriber) {
+        if self.is_downloading(model) {
+            self.weight = Weight::Ready(model);
             self.start_next(transcriber);
         }
     }
 
     pub fn retry_download(&mut self, downloader: &mut dyn Downloader) {
-        if matches!(self.weight, Weight::Failed(_)) {
-            self.start_download(downloader);
+        if let Weight::Failed { model, .. } = self.weight {
+            self.start_download(model, downloader);
         }
     }
 
-    fn start_download(&mut self, downloader: &mut dyn Downloader) {
+    fn start_download(&mut self, model: Model, downloader: &mut dyn Downloader) {
         self.weight = Weight::Downloading {
+            model,
             received: 0,
             total: 0,
         };
-        downloader.start();
+        downloader.start(model);
     }
 
     /// The language can change only while the Recording is Queued.
@@ -544,8 +590,8 @@ impl Library {
             .find(|recording| recording.path == path && recording.status == Status::Transcribing)
     }
 
-    fn is_downloading(&self) -> bool {
-        matches!(self.weight, Weight::Downloading { .. })
+    fn is_downloading(&self, model: Model) -> bool {
+        matches!(self.weight, Weight::Downloading { model: current, .. } if current == model)
     }
 
     /// Queues a finished Recording again, behind everything already Queued.
@@ -581,7 +627,10 @@ impl Library {
     /// The single pump: once the weight is ready and nothing is
     /// Transcribing, the earliest Queued Recording starts.
     fn start_next(&mut self, transcriber: &mut dyn Transcriber) {
-        if self.quitting || self.weight != Weight::Ready || self.transcribing_path().is_some() {
+        let Weight::Ready(model) = self.weight else {
+            return;
+        };
+        if self.quitting || self.transcribing_path().is_some() {
             return;
         }
         let Some(next) = self
@@ -593,7 +642,7 @@ impl Library {
         };
         next.status = Status::Transcribing;
         next.error = None;
-        transcriber.start(&next.path, next.language);
+        transcriber.start(&next.path, next.language, model);
     }
 
     pub fn recordings(&self) -> &[Recording] {
@@ -936,11 +985,13 @@ mod tests {
     #[derive(Default)]
     struct FakeDownloader {
         starts: usize,
+        models: Vec<Model>,
     }
 
     impl Downloader for FakeDownloader {
-        fn start(&mut self) {
+        fn start(&mut self, model: Model) {
             self.starts += 1;
+            self.models.push(model);
         }
     }
 
@@ -949,12 +1000,19 @@ mod tests {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
 
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
 
         assert_eq!(downloader.starts, 1);
+        assert_eq!(downloader.models, vec![Model::LargeV3]);
         assert_eq!(
             library.weight(),
             &Weight::Downloading {
+                model: Model::LargeV3,
                 received: 0,
                 total: 0
             }
@@ -962,27 +1020,46 @@ mod tests {
     }
 
     #[test]
+    fn large_v3_is_named_and_sized_for_its_weight() {
+        assert_eq!(Model::LargeV3.full_name(), "Large v3");
+        assert_eq!(Model::LargeV3.short_name(), "Large");
+        assert_eq!(Model::LargeV3.weight_file(), "ggml-large-v3.bin");
+        assert_eq!(Model::LargeV3.bytes(), 3_095_033_483);
+    }
+
+    #[test]
     fn a_stored_weight_is_ready_without_downloading_again() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
 
-        library.prepare_weight(true, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
 
         assert_eq!(downloader.starts, 0);
-        assert_eq!(library.weight(), &Weight::Ready);
+        assert_eq!(library.weight(), &Weight::Ready(Model::LargeV3));
     }
 
     #[test]
     fn download_progress_shows_how_much_of_the_weight_has_arrived() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
 
-        library.download_progressed(1_800_000_000, 3_095_033_483);
+        library.download_progressed(Model::LargeV3, 1_800_000_000, 3_095_033_483);
 
         assert_eq!(
             library.weight(),
             &Weight::Downloading {
+                model: Model::LargeV3,
                 received: 1_800_000_000,
                 total: 3_095_033_483
             }
@@ -993,13 +1070,24 @@ mod tests {
     fn a_failed_download_stays_failed_and_does_not_retry_by_itself() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(500, 3_000);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 500, 3_000);
 
-        library.download_failed("网络中断".into());
-        library.download_progressed(900, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
+        library.download_progressed(Model::LargeV3, 900, 3_000);
 
-        assert_eq!(library.weight(), &Weight::Failed("网络中断".into()));
+        assert_eq!(
+            library.weight(),
+            &Weight::Failed {
+                model: Model::LargeV3,
+                error: "网络中断".into()
+            }
+        );
         assert_eq!(downloader.starts, 1);
     }
 
@@ -1007,16 +1095,23 @@ mod tests {
     fn retry_starts_the_download_again_from_nothing() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(500, 3_000);
-        library.download_failed("网络中断".into());
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 500, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
 
         library.retry_download(&mut downloader);
 
         assert_eq!(downloader.starts, 2);
+        assert_eq!(downloader.models, vec![Model::LargeV3, Model::LargeV3]);
         assert_eq!(
             library.weight(),
             &Weight::Downloading {
+                model: Model::LargeV3,
                 received: 0,
                 total: 0
             }
@@ -1027,26 +1122,36 @@ mod tests {
     fn a_finished_download_makes_the_weight_ready() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(3_000, 3_000);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 3_000, 3_000);
 
-        library.download_finished(&mut FakeTranscriber::default());
+        library.download_finished(Model::LargeV3, &mut FakeTranscriber::default());
 
-        assert_eq!(library.weight(), &Weight::Ready);
+        assert_eq!(library.weight(), &Weight::Ready(Model::LargeV3));
     }
 
     #[test]
     fn recordings_added_while_the_weight_downloads_or_failed_stay_queued() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
         library.add(
             path("/Users/me/录音/一.m4a"),
             true,
             &mut FakeTranscriber::default(),
         );
-        library.download_progressed(1_000, 3_000);
-        library.download_failed("网络中断".into());
+        library.download_progressed(Model::LargeV3, 1_000, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
         library.add(
             path("/Users/me/录音/二.m4a"),
             true,
@@ -1065,8 +1170,13 @@ mod tests {
     fn retry_does_nothing_while_the_download_is_running() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(1_000, 3_000);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 1_000, 3_000);
 
         library.retry_download(&mut downloader);
 
@@ -1074,6 +1184,7 @@ mod tests {
         assert_eq!(
             library.weight(),
             &Weight::Downloading {
+                model: Model::LargeV3,
                 received: 1_000,
                 total: 3_000
             }
@@ -1083,12 +1194,14 @@ mod tests {
     #[derive(Default)]
     struct FakeTranscriber {
         started: Vec<(PathBuf, Language)>,
+        models: Vec<Model>,
         cancels: usize,
     }
 
     impl Transcriber for FakeTranscriber {
-        fn start(&mut self, path: &Path, language: Language) {
+        fn start(&mut self, path: &Path, language: Language, model: Model) {
             self.started.push((path.to_path_buf(), language));
+            self.models.push(model);
         }
 
         fn cancel(&mut self) {
@@ -1099,7 +1212,12 @@ mod tests {
     fn ready_library() -> (Library, FakeTranscriber) {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         (library, transcriber)
     }
 
@@ -1113,6 +1231,7 @@ mod tests {
         assert_eq!(library.recordings()[0].status, Status::Transcribing);
         assert_eq!(library.recordings()[0].status.label(), "转写中");
         assert_eq!(transcriber.started, vec![(recording, Language::Auto)]);
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
     }
 
     #[test]
@@ -1199,13 +1318,18 @@ mod tests {
     fn the_earliest_recording_queued_during_the_download_starts_when_it_finishes() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let first = path("/Users/me/录音/一.m4a");
         library.add(first.clone(), true, &mut transcriber);
         library.add(path("/Users/me/录音/二.m4a"), true, &mut transcriber);
         assert!(transcriber.started.is_empty());
 
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
 
         assert_eq!(
             statuses(&library),
@@ -1228,7 +1352,12 @@ mod tests {
             Library::from_json(&queued.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(transcriber.started, vec![(first, Language::Auto)]);
     }
@@ -1357,7 +1486,12 @@ mod tests {
             Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        restored.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        restored.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(
             statuses(&restored),
@@ -1370,12 +1504,17 @@ mod tests {
     fn a_language_chosen_before_the_start_is_the_one_the_transcription_uses() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let recording = path("/Users/me/录音/路演彩排.flac");
         library.add(recording.clone(), true, &mut transcriber);
 
         library.set_language(&recording, Language::Chinese);
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
 
         assert_eq!(library.recordings()[0].language, Language::Chinese);
         assert_eq!(transcriber.started, vec![(recording, Language::Chinese)]);
@@ -1444,7 +1583,12 @@ mod tests {
         );
         let mut library = Library::from_json(&snapshot).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         (library, transcriber)
     }
 
@@ -1908,7 +2052,12 @@ mod tests {
         library.add(present.clone(), true, &mut transcriber);
         library.file_checked(&moved, false, &mut transcriber);
 
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         assert_eq!(library.recordings()[0].status, Status::Queued);
         assert_eq!(transcriber.started, vec![(present.clone(), Language::Auto)]);
         library.transcription_finished(&present, 60_000, &mut transcriber);
@@ -1977,7 +2126,12 @@ mod tests {
             Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        next_launch.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        next_launch.prepare_weight(
+            Model::LargeV3,
+            true,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(
             statuses(&next_launch),
@@ -2002,14 +2156,19 @@ mod tests {
     fn nothing_starts_after_quit_even_when_late_events_arrive() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare_weight(
+            Model::LargeV3,
+            false,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let moved = path("/Users/me/录音/移走了.m4a");
         library.add(moved.clone(), true, &mut transcriber);
         library.add(path("/Users/me/录音/二.m4a"), true, &mut transcriber);
         library.file_checked(&moved, false, &mut transcriber);
 
         library.quit(&mut transcriber);
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
         library.file_checked(&moved, true, &mut transcriber);
 
         assert!(transcriber.started.is_empty());

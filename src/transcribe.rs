@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
+use crate::download::weight_path;
 use rubato::{FftFixedInOut, Resampler};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
@@ -14,7 +15,7 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use visper::{Language, Segment};
+use visper::{Language, Model, Segment};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
@@ -56,6 +57,7 @@ pub enum TranscriptionEvent {
 struct Request {
     path: PathBuf,
     language: Language,
+    model: Model,
     cancel: Arc<Cancel>,
 }
 
@@ -87,7 +89,7 @@ impl Cancel {
     }
 }
 
-/// Owns one worker thread that keeps the large-v3 weight loaded between
+/// Owns one worker thread that keeps the weight of the Model loaded between
 /// Recordings and runs one Transcription at a time.
 pub struct WhisperTranscriber {
     requests: Sender<Request>,
@@ -96,9 +98,9 @@ pub struct WhisperTranscriber {
 }
 
 impl WhisperTranscriber {
-    pub fn new(weight: PathBuf, events: Sender<TranscriptionEvent>) -> Self {
+    pub fn new(support: PathBuf, events: Sender<TranscriptionEvent>) -> Self {
         let (requests, pending) = channel();
-        std::thread::spawn(move || work(weight, pending, events));
+        std::thread::spawn(move || work(support, pending, events));
         Self {
             requests,
             cancel: Arc::default(),
@@ -107,11 +109,12 @@ impl WhisperTranscriber {
 }
 
 impl visper::Transcriber for WhisperTranscriber {
-    fn start(&mut self, path: &Path, language: Language) {
+    fn start(&mut self, path: &Path, language: Language, model: Model) {
         self.cancel = Arc::default();
         let _ = self.requests.send(Request {
             path: path.to_path_buf(),
             language,
+            model,
             cancel: self.cancel.clone(),
         });
     }
@@ -121,10 +124,11 @@ impl visper::Transcriber for WhisperTranscriber {
     }
 }
 
-fn work(weight: PathBuf, pending: Receiver<Request>, events: Sender<TranscriptionEvent>) {
+fn work(support: PathBuf, pending: Receiver<Request>, events: Sender<TranscriptionEvent>) {
     whisper_rs::install_logging_hooks();
     let mut gpu = None;
     for request in pending {
+        let weight = weight_path(&support, request.model);
         let outcome = transcribe(&weight, &mut gpu, &request, &events);
         let path = request.path.clone();
         request.cancel.send(
