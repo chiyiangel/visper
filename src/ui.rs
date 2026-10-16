@@ -566,35 +566,41 @@ impl VisperWindow {
     /// is not stored. The popover closes either way.
     fn choose_model(&mut self, model: visper::Model, cx: &mut Context<Self>) {
         self.model_open = false;
-        #[cfg(debug_assertions)]
-        if self.preview {
-            self.library
-                .choose(model, &mut preview::Noop, &mut preview::Noop);
-            cx.notify();
-            return;
-        }
-        // As in `rerun`: an earlier run's events must not reach a new one.
-        self.take_events(cx);
-        self.library
-            .choose(model, &mut *self.downloader, &mut self.transcriber);
-        self.store.save(&self.library);
-        cx.notify();
+        self.change_model(cx, |library, downloader, transcriber| {
+            library.choose(model, downloader, transcriber)
+        });
     }
 
     /// 切回: makes the Model that is on disk current again, abandoning the
     /// download that failed or still runs.
     fn switch_back(&mut self, model: visper::Model, cx: &mut Context<Self>) {
+        self.change_model(cx, |library, downloader, transcriber| {
+            library.switch_back(model, downloader, transcriber);
+        });
+    }
+
+    fn change_model(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(
+            &mut visper::Library,
+            &mut dyn visper::Downloader,
+            &mut dyn visper::Transcriber,
+        ),
+    ) {
         #[cfg(debug_assertions)]
         if self.preview {
-            self.library
-                .switch_back(model, &mut preview::Noop, &mut preview::Noop);
+            change(&mut self.library, &mut preview::Noop, &mut preview::Noop);
             cx.notify();
             return;
         }
-        // As in `choose_model`.
+        // As in `rerun`: an earlier run's events must not reach a new one.
         self.take_events(cx);
-        self.library
-            .switch_back(model, &mut *self.downloader, &mut self.transcriber);
+        change(
+            &mut self.library,
+            &mut *self.downloader,
+            &mut self.transcriber,
+        );
         self.store.save(&self.library);
         cx.notify();
     }

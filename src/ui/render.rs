@@ -240,7 +240,7 @@ impl Ui {
 
 fn button(
     id: &str,
-    text: &'static str,
+    text: impl Into<SharedString>,
     glyph: Option<&str>,
     emphasis: Emphasis,
     enabled: bool,
@@ -278,7 +278,7 @@ fn button(
     if let Some(glyph) = glyph {
         control = control.child(icon(glyph, foreground, 16.0));
     }
-    control = control.child(text).text_color(rgb(foreground));
+    control = control.child(text.into()).text_color(rgb(foreground));
     if !enabled {
         return control.border_color(rgb(palette.line));
     }
@@ -371,6 +371,17 @@ fn lift(alpha: f32) -> Vec<gpui::BoxShadow> {
         color: gpui::hsla(0.0, 0.0, 0.0, alpha),
         offset: point(px(0.0), px(1.0)),
         blur_radius: px(1.0),
+        spread_radius: px(0.0),
+    }]
+}
+
+/// The shadow of a self-drawn popover (visual spec §6), which comes from the
+/// theme so that dark appearance gets its heavier one.
+fn popover_shadow(palette: Palette) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: gpui::hsla(0.0, 0.0, 0.0, palette.popover_shadow),
+        offset: point(px(0.0), px(8.0)),
+        blur_radius: px(24.0),
         spread_radius: px(0.0),
     }]
 }
@@ -689,10 +700,7 @@ fn download_strip(
                     .children(other.map(|other| {
                         button(
                             "switch-back",
-                            match other {
-                                visper::Model::LargeV3 => "切回 Large v3",
-                                visper::Model::LargeV3Turbo => "切回 Large v3 Turbo",
-                            },
+                            format!("切回 {}", other.full_name()),
                             None,
                             Emphasis::Secondary,
                             true,
@@ -749,8 +757,8 @@ fn status(recording: &visper::Recording, palette: Palette) -> Div {
     div()
         .flex()
         .items_center()
-        .gap(px(6.0))
-        .child(icon(glyph, color, 14.0))
+        .gap(px(STATUS_GAP))
+        .child(icon(glyph, color, STATUS_ICON))
         .child(small(recording.status.label(), palette))
 }
 
@@ -967,7 +975,7 @@ fn sidebar(
             let mut meta = div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(META_GAP))
                 .child(status(recording, palette).flex_none());
             let running = timing.filter(|timing| timing.path == recording.path);
             let mut text = None;
@@ -986,19 +994,19 @@ fn sidebar(
             if let Some(text) = text {
                 // What the status and the tag leave of the line, so that only
                 // the text gives way, and with an ellipsis.
-                let mut taken = 14.0
-                    + 6.0
+                let mut taken = STATUS_ICON
+                    + STATUS_GAP
                     + text_width(
                         recording.status.label(),
                         m::SMALL_SIZE,
                         FontWeight::NORMAL,
                         window,
                     )
-                    + 6.0;
+                    + META_GAP;
                 if let Some(model) = tag {
-                    taken += 12.0
-                        + text_width(model.short_name(), 11.0, FontWeight::MEDIUM, window)
-                        + 6.0;
+                    taken += TAG_PAD_X * 2.0
+                        + text_width(model.short_name(), TAG_SIZE, FontWeight::MEDIUM, window)
+                        + META_GAP;
                 }
                 let width = (layout.sidebar - ROW_COPY_INSET - taken).max(0.0);
                 let text = ellipsize(&text, width, |text| {
@@ -1061,7 +1069,7 @@ fn sidebar(
         .child(model_footer(library, model_open, ui, cx))
 }
 
-/// The Model on each line of the popover and the footer.
+/// The Model on each line of the popover.
 fn model_selector(model: visper::Model) -> &'static str {
     match model {
         visper::Model::LargeV3 => "model-large-v3",
@@ -1077,6 +1085,11 @@ fn footer_label_selector(model: Option<visper::Model>) -> &'static str {
     }
 }
 
+/// The weight's size as the popover and the first-launch cards state it.
+fn download_size(model: visper::Model) -> String {
+    format!("{:.1} GB", model.bytes() as f64 / 1e9)
+}
+
 fn model_blurb(model: visper::Model) -> &'static str {
     match model {
         visper::Model::LargeV3 => "更准，较慢",
@@ -1084,16 +1097,24 @@ fn model_blurb(model: visper::Model) -> &'static str {
     }
 }
 
+/// What a Library row's second line is made of, so that the width left for
+/// its text can be worked out from the same numbers that draw it.
+const TAG_PAD_X: f32 = 6.0;
+const TAG_SIZE: f32 = 11.0;
+const STATUS_ICON: f32 = 14.0;
+const STATUS_GAP: f32 = 6.0;
+const META_GAP: f32 = 6.0;
+
 /// 11 / 16 Medium on a faint wash, the same over a row, a selected row and
 /// a selected option.
 fn model_tag(model: visper::Model, palette: Palette) -> Div {
     div()
         .flex_none()
-        .px(px(6.0))
+        .px(px(TAG_PAD_X))
         .rounded(px(4.0))
         .bg(tint(palette.ink, 0.08))
         .whitespace_nowrap()
-        .text_size(px(11.0))
+        .text_size(px(TAG_SIZE))
         .line_height(px(16.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(palette.secondary))
@@ -1182,12 +1203,7 @@ fn model_popover(library: &visper::Library, ui: &Ui, cx: &mut Context<VisperWind
         .border_1()
         .border_color(rgb(palette.line))
         .bg(rgb(palette.raised))
-        .shadow(vec![gpui::BoxShadow {
-            color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
-            offset: point(px(0.0), px(4.0)),
-            blur_radius: px(12.0),
-            spread_radius: px(0.0),
-        }])
+        .shadow(popover_shadow(palette))
         .child(
             div()
                 .pt(px(6.0))
@@ -1205,13 +1221,10 @@ fn model_popover(library: &visper::Library, ui: &Ui, cx: &mut Context<VisperWind
         let chosen = library.model() == Some(model);
         let state = if library.is_on_disk(model) {
             "已下载".to_owned()
-        } else if matches!(
-            library.download(),
-            visper::Download::Running { model: running, .. } if *running == model
-        ) {
+        } else if library.is_downloading(model) {
             "下载中".to_owned()
         } else {
-            format!("需下载 {:.1} GB", model.bytes() as f64 / 1e9)
+            format!("需下载 {}", download_size(model))
         };
         let option = div()
             .id(id.clone())
@@ -1460,12 +1473,7 @@ fn detail_actions(
             .border_1()
             .border_color(rgb(palette.line))
             .bg(rgb(palette.raised))
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(12.0),
-                spread_radius: px(0.0),
-            }])
+            .shadow(popover_shadow(palette))
             .child(
                 button(
                     "remove",
@@ -1970,13 +1978,10 @@ fn model_choice(ui: &Ui, cx: &mut Context<VisperWindow>) -> Vec<gpui::AnyElement
                     .whitespace_nowrap(),
             )
             .child(
-                small(
-                    format!("下载 {:.1} GB", model.bytes() as f64 / 1e9),
-                    palette,
-                )
-                .mt(px(4.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(palette.accent)),
+                small(format!("下载 {}", download_size(model)), palette)
+                    .mt(px(4.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(palette.accent)),
             );
         ui.interactive(card, &id, 10.0, Ring::Outside, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.choose_model(model, cx)))
@@ -2398,6 +2403,71 @@ mod tests {
         assert_eq!(selection.range(0, "中文"), Some(0..6));
     }
 
+    /// A fresh support directory for one test, which removes it at the end.
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "visper-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The Model written to the library file, if any.
+    fn saved_model(library_file: &std::path::Path) -> Option<String> {
+        let saved = std::fs::read_to_string(library_file).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        saved["model"].as_str().map(str::to_owned)
+    }
+
+    /// Starts no download, so that a click cannot reach the network.
+    struct NoDownloads;
+    impl visper::Downloader for NoDownloads {
+        fn start(&mut self, _: visper::Model) {}
+        fn abandon(&mut self, _: visper::Model) {}
+    }
+
+    fn open_offline(
+        cx: &mut gpui::TestAppContext,
+        library_file: &std::path::Path,
+        dir: &std::path::Path,
+    ) -> WindowHandle<VisperWindow> {
+        cx.update(|cx| {
+            open_with(cx, {
+                let store = crate::store::Store::new(library_file.to_owned());
+                let support = dir.to_owned();
+                move |cx| {
+                    let mut view = VisperWindow::new(store, support, cx);
+                    view.downloader = Box::new(NoDownloads);
+                    view
+                }
+            })
+        })
+    }
+
+    /// With no Model on disk adding is off, and a file handed to the window
+    /// anyway is not added.
+    fn assert_adding_is_refused(
+        window: WindowHandle<VisperWindow>,
+        cx: &mut gpui::VisualTestContext,
+        recording: &std::path::Path,
+    ) {
+        window
+            .update(cx, |view, _, cx| {
+                assert!(!view.library.can_add());
+                view.open_files(vec![recording.to_owned()], cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| assert!(view.library.recordings().is_empty()))
+            .unwrap();
+    }
+
     fn recording_count(library_file: &std::path::Path) -> usize {
         let saved = std::fs::read_to_string(library_file).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
@@ -2415,15 +2485,7 @@ mod tests {
     /// unmount 从资料库移除 before the click, so the press did nothing.
     #[gpui::test]
     fn remove_from_library_confirms_then_drops_the_recording(cx: &mut gpui::TestAppContext) {
-        let dir = std::env::temp_dir().join(format!(
-            "visper-remove-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("remove");
         let library_file = dir.join("library.json");
         let recording = "/tmp/visper-remove-test.m4a";
         std::fs::write(
@@ -2483,26 +2545,13 @@ mod tests {
     fn picking_the_other_model_from_the_footer_changes_the_label_and_the_saved_model(
         cx: &mut gpui::TestAppContext,
     ) {
-        let dir = std::env::temp_dir().join(format!(
-            "visper-model-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("model");
         let library_file = dir.join("library.json");
         std::fs::write(&library_file, r#"{"recordings":[],"selected":null}"#).unwrap();
         // Both weights are stored, so choosing one starts no download.
         for model in visper::Model::ALL {
             std::fs::write(crate::download::weight_path(&dir, model), b"weight").unwrap();
         }
-        let saved_model = || {
-            let saved = std::fs::read_to_string(&library_file).unwrap();
-            let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
-            saved["model"].as_str().map(str::to_owned)
-        };
 
         let window = cx.update(|cx| {
             open(
@@ -2522,7 +2571,7 @@ mod tests {
         // A library from before the choice comes up as Large v3.
         assert!(cx.debug_bounds("footer-label-large-v3").is_some());
         assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_none());
-        assert_eq!(saved_model().as_deref(), Some("LargeV3"));
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3"));
         assert!(!popover_open(cx));
 
         click(cx, "model-footer");
@@ -2541,7 +2590,7 @@ mod tests {
             gpui::Modifiers::default(),
         );
         assert!(!popover_open(cx));
-        assert_eq!(saved_model().as_deref(), Some("LargeV3"));
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3"));
 
         click(cx, "model-footer");
         click(cx, "model-large-v3-turbo");
@@ -2549,7 +2598,7 @@ mod tests {
 
         assert!(!popover_open(cx));
         assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
-        assert_eq!(saved_model().as_deref(), Some("LargeV3Turbo"));
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3Turbo"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2558,40 +2607,13 @@ mod tests {
     fn clicking_a_first_launch_card_saves_that_model_and_starts_its_download(
         cx: &mut gpui::TestAppContext,
     ) {
-        struct NoDownloads;
-        impl visper::Downloader for NoDownloads {
-            fn start(&mut self, _: visper::Model) {}
-            fn abandon(&mut self, _: visper::Model) {}
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "visper-first-launch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("first-launch");
         let library_file = dir.join("library.json");
-        let saved_model = || {
-            let saved = std::fs::read_to_string(&library_file).unwrap();
-            let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
-            saved["model"].as_str().map(str::to_owned)
-        };
+        let recording = dir.join("会议.m4a");
+        std::fs::write(&recording, b"audio").unwrap();
 
-        // No library file and no weight: a fresh install. The window is
-        // built here so that a click cannot reach the network.
-        let window = cx.update(|cx| {
-            open_with(cx, {
-                let store = crate::store::Store::new(library_file.clone());
-                let support = dir.clone();
-                move |cx| {
-                    let mut view = VisperWindow::new(store, support, cx);
-                    view.downloader = Box::new(NoDownloads);
-                    view
-                }
-            })
-        });
+        // No library file and no weight: a fresh install.
+        let window = open_offline(cx, &library_file, &dir);
         let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
 
         assert!(cx.debug_bounds("footer-label-none").is_some());
@@ -2607,7 +2629,7 @@ mod tests {
         click(cx, "first-model-large-v3-turbo");
         cx.run_until_parked();
 
-        assert_eq!(saved_model().as_deref(), Some("LargeV3Turbo"));
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3Turbo"));
         assert!(matches!(
             download(cx),
             visper::Download::Running {
@@ -2616,6 +2638,8 @@ mod tests {
             }
         ));
         assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
+        // Downloading is not a Model on disk: adding stays off.
+        assert_adding_is_refused(window, cx, &recording);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2624,35 +2648,12 @@ mod tests {
     fn with_no_weight_on_disk_nothing_can_be_added_until_a_download_finishes(
         cx: &mut gpui::TestAppContext,
     ) {
-        struct NoDownloads;
-        impl visper::Downloader for NoDownloads {
-            fn start(&mut self, _: visper::Model) {}
-            fn abandon(&mut self, _: visper::Model) {}
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "visper-no-model-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("no-model");
         let library_file = dir.join("library.json");
         let recording = dir.join("会议.m4a");
         std::fs::write(&recording, b"audio").unwrap();
 
-        let window = cx.update(|cx| {
-            open_with(cx, {
-                let store = crate::store::Store::new(library_file.clone());
-                let support = dir.clone();
-                move |cx| {
-                    let mut view = VisperWindow::new(store, support, cx);
-                    view.downloader = Box::new(NoDownloads);
-                    view
-                }
-            })
-        });
+        let window = open_offline(cx, &library_file, &dir);
         let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
         let added = |cx: &mut gpui::VisualTestContext| {
             window
@@ -2685,6 +2686,8 @@ mod tests {
         // First download running: still no Model on disk.
         click(cx, "first-model-large-v3");
         cx.run_until_parked();
+
+        assert_adding_is_refused(window, cx, &recording);
 
         window
             .update(cx, |view, _, cx| {

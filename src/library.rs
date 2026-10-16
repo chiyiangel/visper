@@ -167,7 +167,7 @@ pub struct Recording {
     /// The Model the running Transcription started with, which may no
     /// longer be the current one.
     #[serde(skip)]
-    running_model: Option<Model>,
+    transcribing_model: Option<Model>,
     /// What the running Transcription has produced so far.
     #[serde(skip)]
     live: Vec<Segment>,
@@ -622,7 +622,7 @@ impl Library {
         recording.transcript_stored = true;
         recording.transcription_ms = Some(elapsed_ms);
         recording.transcript_model = recording
-            .running_model
+            .transcribing_model
             .take()
             .or(recording.transcript_model);
         self.end(path, Status::Completed, transcriber);
@@ -715,7 +715,8 @@ impl Library {
             .find(|recording| recording.path == path && recording.status == Status::Transcribing)
     }
 
-    fn is_downloading(&self, model: Model) -> bool {
+    /// Whether `model` is the one being fetched right now.
+    pub fn is_downloading(&self, model: Model) -> bool {
         matches!(self.download, Download::Running { model: current, .. } if current == model)
     }
 
@@ -767,7 +768,7 @@ impl Library {
         };
         next.status = Status::Transcribing;
         next.error = None;
-        next.running_model = Some(model);
+        next.transcribing_model = Some(model);
         transcriber.start(&next.path, next.language, model);
     }
 
@@ -869,7 +870,7 @@ impl Library {
             error: None,
             transcription_ms: None,
             transcript_model: None,
-            running_model: None,
+            transcribing_model: None,
             live: Vec::new(),
             progress: None,
         });
@@ -2805,7 +2806,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_or_cancel_after_a_turbo_success_keeps_the_earlier_model() {
+    fn a_failure_or_cancel_after_a_turbo_completion_keeps_the_earlier_model() {
         let (mut library, mut transcriber) = library_with_both_weights();
         let failing = path("/Users/me/录音/一.m4a");
         let cancelled = path("/Users/me/录音/二.m4a");

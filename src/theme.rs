@@ -29,6 +29,8 @@ pub struct Palette {
     pub danger: u32,
     pub danger_surface: u32,
     pub disabled: u32,
+    /// Opacity of the black shadow under a self-drawn popover.
+    pub popover_shadow: f32,
 }
 
 impl Palette {
@@ -58,6 +60,7 @@ impl Palette {
                 danger: 0xe29e94,
                 danger_surface: 0x3a2927,
                 disabled: 0x647065,
+                popover_shadow: 0.24,
             },
             _ => Self {
                 main: 0xfaf9f6,
@@ -83,6 +86,7 @@ impl Palette {
                 danger: 0x9c443f,
                 danger_surface: 0xf7ece9,
                 disabled: 0x929990,
+                popover_shadow: 0.12,
             },
         }
     }
