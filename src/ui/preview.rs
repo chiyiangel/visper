@@ -7,6 +7,7 @@ use std::path::Path;
 pub(super) struct Noop;
 impl visper::Downloader for Noop {
     fn start(&mut self, _: visper::Model) {}
+    fn abandon(&mut self, _: visper::Model) {}
 }
 impl visper::Transcriber for Noop {
     fn start(&mut self, _: &Path, _: visper::Language, _: visper::Model) {}
@@ -46,7 +47,7 @@ fn fixture(scenario: &str) -> visper::Library {
     let path = RECORDING;
     let mut rows = Vec::new();
     if scenario != "empty" {
-        let status = if scenario == "transcribing" || scenario == "model-download" {
+        let status = if scenario == "transcribing" || scenario.starts_with("model-download") {
             "Queued"
         } else if scenario == "failure" {
             "Failed"
@@ -113,13 +114,18 @@ fn fixture(scenario: &str) -> visper::Library {
     } else {
         vec![visper::Model::LargeV3]
     };
-    if scenario == "model-download" {
+    if scenario == "model-download" || scenario == "model-download-failed" {
         // Chosen before the queue starts, so the Queued Recording waits.
         library.choose(visper::Model::LargeV3Turbo, &mut Noop, &mut Noop);
     }
     library.prepare(&on_disk, &mut Noop, &mut Noop);
     if scenario == "empty" {
         library.download_progressed(visper::Model::LargeV3, 1_795_000_000, 3_095_033_483);
+    } else if scenario == "model-download-failed" {
+        library.download_failed(
+            visper::Model::LargeV3Turbo,
+            "连接下载地址失败：网络中断".into(),
+        );
     } else if scenario == "model-download" {
         library.download_progressed(visper::Model::LargeV3Turbo, 640_000_000, 1_624_555_275);
     } else if scenario == "transcribing" {

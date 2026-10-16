@@ -581,6 +581,24 @@ impl VisperWindow {
         cx.notify();
     }
 
+    /// 切回: makes the Model that is on disk current again, abandoning the
+    /// download that failed or still runs.
+    fn switch_back(&mut self, model: visper::Model, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if self.preview {
+            self.library
+                .switch_back(model, &mut preview::Noop, &mut preview::Noop);
+            cx.notify();
+            return;
+        }
+        // As in `choose_model`.
+        self.take_events(cx);
+        self.library
+            .switch_back(model, &mut self.downloader, &mut self.transcriber);
+        self.store.save(&self.library);
+        cx.notify();
+    }
+
     fn retry_download(&mut self, cx: &mut Context<Self>) {
         self.library.retry_download(&mut self.downloader);
         cx.notify();

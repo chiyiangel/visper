@@ -535,7 +535,7 @@ impl Render for VisperWindow {
                         style.bg(rgb(palette.playing))
                     })
                     .child(pane_header(library.selected(), &view, &ui, layout, cx))
-                    .children(download_strip(library.download(), &ui, layout, cx))
+                    .children(download_strip(&library, &ui, layout, cx))
                     .children(self.notice.clone().map(|text| notice_bar(text, &ui, cx)))
                     .child(detail(&library, &view, &ui, layout, timing.as_ref(), cx)),
             )
@@ -574,7 +574,7 @@ fn pane_header(
 }
 
 fn download_strip(
-    download: &visper::Download,
+    library: &visper::Library,
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
@@ -590,7 +590,7 @@ fn download_strip(
         .items_center()
         .border_b_1()
         .border_color(rgb(palette.line));
-    match download {
+    match library.download() {
         visper::Download::Running {
             model,
             received,
@@ -650,36 +650,57 @@ fn download_strip(
                     .child(small(amount, palette).flex_none().font_family(m::MONO_FONT)),
             )
         }
-        visper::Download::Failed { error, .. } => Some(
-            strip
-                .child(icon("warning", palette.danger, 20.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            label("模型下载失败")
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.danger)),
-                        )
-                        .child(small(error.clone(), palette)),
-                )
-                .child(
-                    button(
-                        "retry-download",
-                        "重试",
-                        Some("retry"),
-                        Emphasis::Secondary,
-                        true,
-                        ui,
-                        cx,
+        visper::Download::Failed { model, error } => {
+            // Only a Model that is on disk can be switched back to.
+            let other = visper::Model::ALL
+                .into_iter()
+                .find(|other| other != model && library.is_on_disk(*other));
+            Some(
+                strip
+                    .child(icon("warning", palette.danger, 20.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                label(format!("{} 下载失败", model.full_name()))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(palette.danger)),
+                            )
+                            .child(small(error.clone(), palette)),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_download(cx))),
-                ),
-        ),
+                    .child(
+                        button(
+                            "retry-download",
+                            "重试",
+                            Some("retry"),
+                            Emphasis::Secondary,
+                            true,
+                            ui,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.retry_download(cx))),
+                    )
+                    .children(other.map(|other| {
+                        button(
+                            "switch-back",
+                            match other {
+                                visper::Model::LargeV3 => "切回 Large v3",
+                                visper::Model::LargeV3Turbo => "切回 Large v3 Turbo",
+                            },
+                            None,
+                            Emphasis::Secondary,
+                            true,
+                            ui,
+                            cx,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.switch_back(other, cx)))
+                    })),
+            )
+        }
         visper::Download::Idle => None,
     }
 }

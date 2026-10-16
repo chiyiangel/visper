@@ -352,6 +352,9 @@ impl Model {
 /// the `download_*` actions on [`Library`].
 pub trait Downloader {
     fn start(&mut self, model: Model);
+    /// Stops the download of `model` and deletes its partial file. Nothing
+    /// more is reported for it.
+    fn abandon(&mut self, model: Model);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,8 +388,8 @@ pub trait Transcriber {
     fn cancel(&mut self);
 }
 
-/// The one weight being fetched, or the last fetch that failed. It is not
-/// tied to the current Model: a download can outlive a switch.
+/// The one weight being fetched, or the last fetch that failed. A switch
+/// to another Model abandons it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Download {
     #[default]
@@ -472,7 +475,8 @@ impl Library {
     }
 
     /// Makes `model` the one later Transcriptions use, fetching its weight
-    /// first when it is not stored. A running Transcription is left alone.
+    /// first when it is not stored. A running Transcription is left alone,
+    /// and a download of the other Model is abandoned: only one is in flight.
     pub fn choose(
         &mut self,
         model: Model,
@@ -483,13 +487,37 @@ impl Library {
             return;
         }
         self.model = Some(model);
+        match self.download {
+            Download::Running { model: running, .. } if running != model => {
+                downloader.abandon(running);
+                self.download = Download::Idle;
+            }
+            // A failure of the other Model is no longer about the choice.
+            Download::Failed { model: failed, .. } if failed != model => {
+                self.download = Download::Idle;
+            }
+            _ => {}
+        }
         if self.is_on_disk(model) {
             self.start_next(transcriber);
         } else if !self.is_downloading(model) {
-            // A download of the other Model, if one runs, is not stopped; it
-            // only stops being shown.
             self.start_download(model, downloader);
         }
+    }
+
+    /// Makes a Model that is on disk current again and lets the queue run.
+    /// Refused (false) for a Model that is not on disk.
+    pub fn switch_back(
+        &mut self,
+        model: Model,
+        downloader: &mut dyn Downloader,
+        transcriber: &mut dyn Transcriber,
+    ) -> bool {
+        if !self.is_on_disk(model) {
+            return false;
+        }
+        self.choose(model, downloader, transcriber);
+        true
     }
 
     pub fn download_progressed(&mut self, model: Model, received: u64, total: u64) {
@@ -509,12 +537,12 @@ impl Library {
     }
 
     pub fn download_finished(&mut self, model: Model, transcriber: &mut dyn Transcriber) {
-        // The weight is stored whichever download the window is showing.
+        if !self.is_downloading(model) {
+            return;
+        }
+        self.download = Download::Idle;
         if !self.is_on_disk(model) {
             self.on_disk.push(model);
-        }
-        if self.is_downloading(model) {
-            self.download = Download::Idle;
         }
         if self.model == Some(model) {
             self.start_next(transcriber);
@@ -1074,12 +1102,17 @@ mod tests {
     struct FakeDownloader {
         starts: usize,
         models: Vec<Model>,
+        abandoned: Vec<Model>,
     }
 
     impl Downloader for FakeDownloader {
         fn start(&mut self, model: Model) {
             self.starts += 1;
             self.models.push(model);
+        }
+
+        fn abandon(&mut self, model: Model) {
+            self.abandoned.push(model);
         }
     }
 
@@ -1291,16 +1324,16 @@ mod tests {
     }
 
     #[test]
-    fn choosing_a_second_missing_model_mid_download_downloads_that_one_and_keeps_the_first_weight()
-    {
+    fn choosing_a_second_missing_model_mid_download_abandons_the_first_and_downloads_the_new_one() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
         let mut transcriber = FakeTranscriber::default();
         library.prepare(&[], &mut downloader, &mut transcriber);
-
-        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
         library.download_progressed(Model::LargeV3, 900, 3_000);
 
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+
+        assert_eq!(downloader.abandoned, vec![Model::LargeV3]);
         assert_eq!(downloader.models, vec![Model::LargeV3, Model::LargeV3Turbo]);
         assert_eq!(
             library.download(),
@@ -1313,10 +1346,116 @@ mod tests {
 
         library.download_finished(Model::LargeV3, &mut transcriber);
 
+        assert!(!library.is_on_disk(Model::LargeV3));
         assert!(!library.is_ready());
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+    }
+
+    /// Large v3 on disk and one Queued Recording waiting for a Turbo download
+    /// that has started.
+    fn waiting_for_turbo() -> (Library, FakeDownloader, FakeTranscriber, PathBuf) {
+        let (mut library, mut transcriber) = ready_library();
+        let mut downloader = FakeDownloader::default();
+        let waiting = path("/Users/me/录音/三.m4a");
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        library.add(waiting.clone(), true, &mut transcriber);
+        library.download_progressed(Model::LargeV3Turbo, 640, 1_600);
+        (library, downloader, transcriber, waiting)
+    }
+
+    #[test]
+    fn switching_back_to_a_model_on_disk_mid_download_abandons_it_and_the_queue_runs() {
+        let (mut library, mut downloader, mut transcriber, waiting) = waiting_for_turbo();
+        assert_eq!(library.recording(&waiting).unwrap().status, Status::Queued);
+
         library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
-        assert!(library.is_ready());
-        assert_eq!(downloader.starts, 2);
+
+        assert_eq!(downloader.abandoned, vec![Model::LargeV3Turbo]);
+        assert_eq!(library.download(), &Download::Idle);
+        assert_eq!(library.model(), Some(Model::LargeV3));
+        assert_eq!(
+            library.recording(&waiting).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
+    }
+
+    #[test]
+    fn late_events_from_an_abandoned_download_change_nothing() {
+        let (mut library, mut downloader, mut transcriber, _) = waiting_for_turbo();
+        library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
+        let before = library.clone();
+        let started = transcriber.models.len();
+
+        library.download_progressed(Model::LargeV3Turbo, 900, 1_600);
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+        library.download_finished(Model::LargeV3Turbo, &mut transcriber);
+
+        assert_eq!(library, before);
+        assert!(!library.is_on_disk(Model::LargeV3Turbo));
+        assert_eq!(transcriber.models.len(), started);
+    }
+
+    #[test]
+    fn retry_after_a_failed_switch_downloads_the_same_model_again() {
+        let (mut library, mut downloader, _, _) = waiting_for_turbo();
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+
+        library.retry_download(&mut downloader);
+
+        assert_eq!(
+            downloader.models,
+            vec![Model::LargeV3Turbo, Model::LargeV3Turbo]
+        );
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+        assert_eq!(library.model(), Some(Model::LargeV3Turbo));
+    }
+
+    #[test]
+    fn switching_back_after_a_failed_download_makes_the_model_current_and_the_queue_runs() {
+        let (mut library, mut downloader, mut transcriber, waiting) = waiting_for_turbo();
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+
+        let allowed = library.switch_back(Model::LargeV3, &mut downloader, &mut transcriber);
+
+        assert!(allowed);
+        assert_eq!(library.model(), Some(Model::LargeV3));
+        assert_eq!(library.download(), &Download::Idle);
+        assert_eq!(
+            library.recording(&waiting).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
+        assert!(downloader.abandoned.is_empty());
+    }
+
+    #[test]
+    fn switching_back_is_only_allowed_to_a_model_on_disk() {
+        let (mut library, mut downloader, mut transcriber) = {
+            let (library, transcriber) = ready_library();
+            (library, FakeDownloader::default(), transcriber)
+        };
+        let before = library.clone();
+
+        let allowed = library.switch_back(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+
+        assert!(!allowed);
+        assert_eq!(library, before);
+        assert_eq!(downloader.starts, 0);
     }
 
     #[test]

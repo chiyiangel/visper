@@ -59,13 +59,11 @@ impl visper::Downloader for WeightDownloader {
         if self.attempts.iter().any(|attempt| attempt.model == model) {
             return;
         }
-        let attempt = Arc::new(Attempt {
+        let attempt = Arc::new(Attempt::new(
             model,
-            target: weight_path(&self.support, model),
-            events: self.events.clone(),
-            ended: AtomicBool::new(false),
-            last_byte: Mutex::new(Instant::now()),
-        });
+            weight_path(&self.support, model),
+            self.events.clone(),
+        ));
         self.attempts.push(attempt.clone());
         let fetching = attempt.clone();
         std::thread::spawn(move || {
@@ -85,20 +83,52 @@ impl visper::Downloader for WeightDownloader {
             }
         });
     }
+
+    fn abandon(&mut self, model: Model) {
+        for attempt in self
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.model == model)
+        {
+            attempt.abandon();
+        }
+        self.attempts.retain(|attempt| !attempt.has_ended());
+    }
 }
 
-/// One run of the download. Whoever ends it first (the fetch or the stall
-/// watchdog) sends the only terminal event; an abandoned fetch stops writing.
+/// One run of the download. Whoever ends it first (the fetch, the stall
+/// watchdog or an abandon) ends it for good; only the first two send the
+/// terminal event, and an ended fetch stops writing.
 struct Attempt {
     model: Model,
     target: PathBuf,
     events: Sender<DownloadEvent>,
     ended: AtomicBool,
+    /// Held while the `.part` file is created, renamed or deleted, so that an
+    /// abandon cannot fall between the check that the attempt still runs and
+    /// the file operation that follows it.
+    file: Mutex<()>,
     last_byte: Mutex<Instant>,
 }
 
 impl Attempt {
+    fn new(model: Model, target: PathBuf, events: Sender<DownloadEvent>) -> Self {
+        Self {
+            model,
+            target,
+            events,
+            ended: AtomicBool::new(false),
+            file: Mutex::new(()),
+            last_byte: Mutex::new(Instant::now()),
+        }
+    }
+
     fn end(&self, event: DownloadEvent) -> bool {
+        let _file = self.file.lock();
+        self.end_locked(event)
+    }
+
+    fn end_locked(&self, event: DownloadEvent) -> bool {
         if self.ended.swap(true, Ordering::SeqCst) {
             return false;
         }
@@ -107,6 +137,39 @@ impl Attempt {
         }
         let _ = self.events.send(event);
         true
+    }
+
+    /// Stops the attempt without reporting anything and deletes its partial
+    /// file. The fetch notices and never renames it into place.
+    fn abandon(&self) {
+        let _file = self.file.lock();
+        if !self.ended.swap(true, Ordering::SeqCst) {
+            let _ = fs::remove_file(self.partial());
+        }
+    }
+
+    /// Creates the partial file, unless the attempt has already ended.
+    fn create_partial(&self) -> Result<Option<File>, String> {
+        let _file = self.file.lock();
+        if self.has_ended() {
+            return Ok(None);
+        }
+        File::create(self.partial())
+            .map(Some)
+            .map_err(|error| format!("写入模型失败：{error}"))
+    }
+
+    /// Moves the finished partial file into place and reports it, unless the
+    /// attempt has ended meanwhile.
+    fn complete(&self) -> Result<(), String> {
+        let _file = self.file.lock();
+        if self.has_ended() {
+            return Ok(());
+        }
+        fs::rename(self.partial(), &self.target)
+            .map_err(|error| format!("保存模型失败：{error}"))?;
+        self.end_locked(DownloadEvent::Finished { model: self.model });
+        Ok(())
     }
 
     fn has_ended(&self) -> bool {
@@ -146,13 +209,17 @@ impl Attempt {
         let expected = response.body().content_length();
         let mut reader = response.into_body().into_reader();
 
-        let file =
-            File::create(self.partial()).map_err(|error| format!("写入模型失败：{error}"))?;
+        let Some(file) = self.create_partial()? else {
+            return Ok(());
+        };
         let mut writer = BufWriter::new(file);
         let mut buffer = vec![0; 1 << 20];
         let mut received = 0;
         let mut reported = Instant::now();
         let report = |received: u64| {
+            if self.has_ended() {
+                return;
+            }
             let total = expected.unwrap_or(self.model.bytes()).max(received);
             let _ = self.events.send(DownloadEvent::Progressed {
                 model: self.model,
@@ -192,12 +259,87 @@ impl Attempt {
             return Err(format!("下载不完整：只收到 {received} / {expected} 字节。"));
         }
         report(received);
-        if self.has_ended() {
-            return Ok(());
-        }
-        fs::rename(self.partial(), &self.target)
-            .map_err(|error| format!("保存模型失败：{error}"))?;
-        self.end(DownloadEvent::Finished { model: self.model });
-        Ok(())
+        self.complete()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::{Receiver, channel};
+
+    /// An attempt whose `.part` file already holds some bytes, in a fresh
+    /// directory.
+    fn attempt_with_partial(name: &str) -> (Attempt, Receiver<DownloadEvent>, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("visper-download-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let (sender, receiver) = channel();
+        let attempt = Attempt::new(
+            Model::LargeV3Turbo,
+            weight_path(&dir, Model::LargeV3Turbo),
+            sender,
+        );
+        fs::write(attempt.partial(), b"half a weight").unwrap();
+        (attempt, receiver, dir)
+    }
+
+    #[test]
+    fn abandoning_deletes_the_partial_file_and_it_is_never_renamed_into_place() {
+        let (attempt, events, dir) = attempt_with_partial("abandon");
+
+        attempt.abandon();
+        // The fetch, which was already past its last read, now finishes.
+        attempt.complete().unwrap();
+
+        assert!(!attempt.partial().exists());
+        assert!(!attempt.target.exists());
+        assert!(events.try_recv().is_err());
+        assert!(attempt.create_partial().unwrap().is_none());
+        assert!(!attempt.partial().exists());
+        assert!(!attempt.end(DownloadEvent::Failed {
+            model: Model::LargeV3Turbo,
+            error: "late".into()
+        }));
+        assert!(events.try_recv().is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_complete_download_is_renamed_into_place_and_reported_once() {
+        let (attempt, events, dir) = attempt_with_partial("complete");
+
+        attempt.complete().unwrap();
+
+        assert!(!attempt.partial().exists());
+        assert_eq!(fs::read(&attempt.target).unwrap(), b"half a weight");
+        assert!(matches!(
+            events.try_recv(),
+            Ok(DownloadEvent::Finished {
+                model: Model::LargeV3Turbo
+            })
+        ));
+        attempt.abandon();
+        assert!(attempt.target.exists());
+        assert!(events.try_recv().is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_attempt_deletes_its_partial_file() {
+        let (attempt, events, dir) = attempt_with_partial("failed");
+
+        attempt.end(DownloadEvent::Failed {
+            model: Model::LargeV3Turbo,
+            error: "stalled".into(),
+        });
+
+        assert!(!attempt.partial().exists());
+        assert!(matches!(
+            events.try_recv(),
+            Ok(DownloadEvent::Failed { .. })
+        ));
+        let _ = fs::remove_dir_all(dir);
     }
 }
