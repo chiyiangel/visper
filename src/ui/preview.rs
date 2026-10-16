@@ -46,7 +46,8 @@ fn segments() -> Vec<serde_json::Value> {
 fn fixture(scenario: &str) -> visper::Library {
     let path = RECORDING;
     let mut rows = Vec::new();
-    if scenario != "empty" {
+    let blank = scenario == "empty" || scenario.starts_with("first-launch");
+    if !blank {
         let status = if scenario == "transcribing" || scenario.starts_with("model-download") {
             "Queued"
         } else if scenario == "failure" {
@@ -109,7 +110,7 @@ fn fixture(scenario: &str) -> visper::Library {
         .to_string(),
     )
     .expect("valid preview Library");
-    let on_disk = if scenario == "empty" {
+    let on_disk = if scenario.starts_with("first-launch") {
         vec![]
     } else {
         vec![visper::Model::LargeV3]
@@ -119,8 +120,14 @@ fn fixture(scenario: &str) -> visper::Library {
         library.choose(visper::Model::LargeV3Turbo, &mut Noop, &mut Noop);
     }
     library.prepare(&on_disk, &mut Noop, &mut Noop);
-    if scenario == "empty" {
+    if scenario == "first-launch-download" || scenario == "first-launch-failed" {
+        // The click on a card, without the network behind it.
+        library.choose(visper::Model::LargeV3, &mut Noop, &mut Noop);
+    }
+    if scenario == "first-launch-download" {
         library.download_progressed(visper::Model::LargeV3, 1_795_000_000, 3_095_033_483);
+    } else if scenario == "first-launch-failed" {
+        library.download_failed(visper::Model::LargeV3, "连接下载地址失败：网络中断".into());
     } else if scenario == "model-download-failed" {
         library.download_failed(
             visper::Model::LargeV3Turbo,

@@ -1278,7 +1278,14 @@ fn detail(
 ) -> gpui::AnyElement {
     let palette = ui.palette;
     let Some(recording) = library.selected() else {
-        return empty_detail(library.is_empty(), ui, layout, cx).into_any_element();
+        return empty_detail(
+            library.is_empty(),
+            library.model().is_none(),
+            ui,
+            layout,
+            cx,
+        )
+        .into_any_element();
     };
     let header = div()
         .px(px(layout.padding))
@@ -1792,7 +1799,13 @@ fn failure(recording: &visper::Recording, palette: Palette) -> Option<Div> {
     ))
 }
 
-fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWindow>) -> Div {
+fn empty_detail(
+    empty: bool,
+    choosing: bool,
+    ui: &Ui,
+    layout: Layout,
+    cx: &mut Context<VisperWindow>,
+) -> Div {
     let palette = ui.palette;
     let pane = div()
         .flex_1()
@@ -1854,15 +1867,22 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("把录音变成文字"),
                     )
-                    .child(label("拖入录音，或选择本机文件").text_color(rgb(palette.secondary)))
-                    .child(div().mt(px(8.0)).child(pick))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
-                            .text_color(rgb(palette.tertiary))
-                            .child("M4A · MP3 · WAV · FLAC · AAC"),
-                    )
+                    .children(if choosing {
+                        model_choice(ui, cx)
+                    } else {
+                        vec![
+                            label("拖入录音，或选择本机文件")
+                                .text_color(rgb(palette.secondary))
+                                .into_any_element(),
+                            div().mt(px(8.0)).child(pick).into_any_element(),
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(rgb(palette.tertiary))
+                                .child("M4A · MP3 · WAV · FLAC · AAC")
+                                .into_any_element(),
+                        ]
+                    })
                     .child(
                         div()
                             .mt(px(32.0))
@@ -1874,6 +1894,95 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
                     ),
             ),
     )
+}
+
+/// First launch: the line, one card per Model and the note under them.
+/// Nothing is preselected; a click chooses the Model and starts its download.
+fn model_choice(ui: &Ui, cx: &mut Context<VisperWindow>) -> Vec<gpui::AnyElement> {
+    let palette = ui.palette;
+    let cards = visper::Model::ALL.into_iter().map(|model| {
+        let id = SharedString::from(first_model_selector(model));
+        let level = ui.motion.hover(&id);
+        let card = div()
+            .id(id.clone())
+            .debug_selector(move || first_model_selector(model).into())
+            .flex_1()
+            .min_w_0()
+            .px(px(16.0))
+            .py(px(14.0))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(4.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(rgb(mix(palette.line, palette.ink, 0.06 * level)))
+            .bg(rgb(mix(palette.raised, palette.ink, 0.04 * level)))
+            .active(move |style| style.bg(rgb(mix(palette.raised, palette.ink, 0.08))))
+            .text_left()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        label(model.full_name())
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .font_weight(FontWeight::SEMIBOLD),
+                    )
+                    .child(model_tag(model, palette)),
+            )
+            .child(
+                small(first_model_note(model), palette)
+                    .text_size(px(11.0))
+                    .line_height(px(16.0))
+                    .whitespace_nowrap(),
+            )
+            .child(
+                small(
+                    format!("下载 {:.1} GB", model.bytes() as f64 / 1e9),
+                    palette,
+                )
+                .mt(px(4.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(palette.accent)),
+            );
+        ui.interactive(card, &id, 10.0, Ring::Outside, cx)
+            .on_click(cx.listener(move |this, _, _, cx| this.choose_model(model, cx)))
+    });
+    vec![
+        label("先选一个转写模型，点一下就开始下载")
+            .text_color(rgb(palette.secondary))
+            .into_any_element(),
+        div()
+            .mt(px(8.0))
+            .w(px(440.0))
+            .flex()
+            .gap(px(12.0))
+            .children(cards)
+            .into_any_element(),
+        div()
+            .text_size(px(11.0))
+            .line_height(px(16.0))
+            .text_color(rgb(palette.tertiary))
+            .child("模型下载完成后就能加入录音")
+            .into_any_element(),
+    ]
+}
+
+fn first_model_selector(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "first-model-large-v3",
+        visper::Model::LargeV3Turbo => "first-model-large-v3-turbo",
+    }
+}
+
+fn first_model_note(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "准确度最高，适合专有名词多的访谈",
+        visper::Model::LargeV3Turbo => "快得多，准确度略低，适合日常会议",
+    }
 }
 
 fn transcript(
@@ -2411,6 +2520,72 @@ mod tests {
         assert!(!popover_open(cx));
         assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
         assert_eq!(saved_model().as_deref(), Some("LargeV3Turbo"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn clicking_a_first_launch_card_saves_that_model_and_starts_its_download(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct NoDownloads;
+        impl visper::Downloader for NoDownloads {
+            fn start(&mut self, _: visper::Model) {}
+            fn abandon(&mut self, _: visper::Model) {}
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "visper-first-launch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let library_file = dir.join("library.json");
+        let saved_model = || {
+            let saved = std::fs::read_to_string(&library_file).unwrap();
+            let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+            saved["model"].as_str().map(str::to_owned)
+        };
+
+        // No library file and no weight: a fresh install. The window is
+        // built here so that a click cannot reach the network.
+        let window = cx.update(|cx| {
+            open_with(cx, {
+                let store = crate::store::Store::new(library_file.clone());
+                let support = dir.clone();
+                move |cx| {
+                    let mut view = VisperWindow::new(store, support, cx);
+                    view.downloader = Box::new(NoDownloads);
+                    view
+                }
+            })
+        });
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+
+        assert!(cx.debug_bounds("footer-label-none").is_some());
+        assert!(cx.debug_bounds("first-model-large-v3").is_some());
+        assert!(cx.debug_bounds("first-model-large-v3-turbo").is_some());
+        let download = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |view, _| view.library.download().clone())
+                .unwrap()
+        };
+        assert_eq!(download(cx), visper::Download::Idle);
+
+        click(cx, "first-model-large-v3-turbo");
+        cx.run_until_parked();
+
+        assert_eq!(saved_model().as_deref(), Some("LargeV3Turbo"));
+        assert!(matches!(
+            download(cx),
+            visper::Download::Running {
+                model: visper::Model::LargeV3Turbo,
+                ..
+            }
+        ));
+        assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

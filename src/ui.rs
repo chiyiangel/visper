@@ -36,7 +36,7 @@ pub struct VisperWindow {
     player: Player,
     was_playing: bool,
     store: Store,
-    downloader: WeightDownloader,
+    downloader: Box<dyn visper::Downloader>,
     download_events: Receiver<DownloadEvent>,
     transcriber: WhisperTranscriber,
     transcription_events: Receiver<TranscriptionEvent>,
@@ -70,7 +70,7 @@ impl VisperWindow {
         let preview = preview_library.is_some();
         let mut library = preview_library.unwrap_or_else(|| store.load());
         let (sender, download_events) = channel();
-        let mut downloader = WeightDownloader::new(support.clone(), sender);
+        let mut downloader = Box::new(WeightDownloader::new(support.clone(), sender));
         let (sender, transcription_events) = channel();
         let mut transcriber = WhisperTranscriber::new(support.clone(), sender);
         let paths: Vec<PathBuf> = library
@@ -86,7 +86,7 @@ impl VisperWindow {
                 .into_iter()
                 .filter(|model| weight_path(&support, *model).is_file())
                 .collect();
-            library.prepare(&on_disk, &mut downloader, &mut transcriber);
+            library.prepare(&on_disk, &mut *downloader, &mut transcriber);
             store.save(&library);
         }
         cx.spawn(async move |this, cx| {
@@ -576,7 +576,7 @@ impl VisperWindow {
         // As in `rerun`: an earlier run's events must not reach a new one.
         self.take_events(cx);
         self.library
-            .choose(model, &mut self.downloader, &mut self.transcriber);
+            .choose(model, &mut *self.downloader, &mut self.transcriber);
         self.store.save(&self.library);
         cx.notify();
     }
@@ -594,13 +594,13 @@ impl VisperWindow {
         // As in `choose_model`.
         self.take_events(cx);
         self.library
-            .switch_back(model, &mut self.downloader, &mut self.transcriber);
+            .switch_back(model, &mut *self.downloader, &mut self.transcriber);
         self.store.save(&self.library);
         cx.notify();
     }
 
     fn retry_download(&mut self, cx: &mut Context<Self>) {
-        self.library.retry_download(&mut self.downloader);
+        self.library.retry_download(&mut *self.downloader);
         cx.notify();
     }
 
