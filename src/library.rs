@@ -160,6 +160,14 @@ pub struct Recording {
     /// How long the last successful Transcription took.
     #[serde(default)]
     transcription_ms: Option<u64>,
+    /// The Model that produced `segments`. Missing in a Transcript stored
+    /// before there was a choice: that was Large v3.
+    #[serde(default)]
+    transcript_model: Option<Model>,
+    /// The Model the running Transcription started with, which may no
+    /// longer be the current one.
+    #[serde(skip)]
+    running_model: Option<Model>,
     /// What the running Transcription has produced so far.
     #[serde(skip)]
     live: Vec<Segment>,
@@ -273,6 +281,18 @@ impl Recording {
 
     pub fn duration_ms(&self) -> Option<u64> {
         self.duration_ms
+    }
+
+    /// The Model of the stored Transcript, if there is one.
+    pub fn transcript_model(&self) -> Option<Model> {
+        self.transcript_stored
+            .then(|| self.transcript_model.unwrap_or(Model::LargeV3))
+    }
+
+    /// The Model to show beside a finished Recording: the stored
+    /// Transcript's, but not while a new Transcription is queued or running.
+    pub fn shown_model(&self) -> Option<Model> {
+        self.transcript_model().filter(|_| self.is_finished())
     }
 }
 
@@ -561,6 +581,10 @@ impl Library {
         recording.segments = std::mem::take(&mut recording.live);
         recording.transcript_stored = true;
         recording.transcription_ms = Some(elapsed_ms);
+        recording.transcript_model = recording
+            .running_model
+            .take()
+            .or(recording.transcript_model);
         self.end(path, Status::Completed, transcriber);
     }
 
@@ -703,6 +727,7 @@ impl Library {
         };
         next.status = Status::Transcribing;
         next.error = None;
+        next.running_model = Some(model);
         transcriber.start(&next.path, next.language, model);
     }
 
@@ -800,6 +825,8 @@ impl Library {
             missing: false,
             error: None,
             transcription_ms: None,
+            transcript_model: None,
+            running_model: None,
             live: Vec::new(),
             progress: None,
         });
@@ -2388,5 +2415,166 @@ mod tests {
 
         assert!(transcriber.started.is_empty());
         assert_eq!(statuses(&library), vec![Status::Queued, Status::Queued]);
+    }
+
+    fn choose_turbo(library: &mut Library, transcriber: &mut FakeTranscriber) {
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            transcriber,
+        );
+    }
+
+    #[test]
+    fn a_transcription_that_succeeds_with_turbo_records_turbo() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        choose_turbo(&mut library, &mut transcriber);
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            None
+        );
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn the_model_recorded_is_the_one_the_transcription_started_with() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        choose_turbo(&mut library, &mut transcriber);
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3)
+        );
+    }
+
+    #[test]
+    fn a_failure_or_cancel_after_a_turbo_success_keeps_the_earlier_model() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let failing = path("/Users/me/录音/一.m4a");
+        let cancelled = path("/Users/me/录音/二.m4a");
+        choose_turbo(&mut library, &mut transcriber);
+        library.add(failing.clone(), true, &mut transcriber);
+        library.transcription_finished(&failing, 1_000, &mut transcriber);
+        library.add(cancelled.clone(), true, &mut transcriber);
+        library.transcription_finished(&cancelled, 1_000, &mut transcriber);
+        library.choose(
+            Model::LargeV3,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
+
+        library.rerun(&failing, true, &mut transcriber);
+        library.transcription_failed(&failing, "坏了".into(), &mut transcriber);
+        library.rerun(&cancelled, true, &mut transcriber);
+        library.cancel(&cancelled, &mut transcriber);
+
+        for path in [&failing, &cancelled] {
+            let recording = library.recording(path).unwrap();
+            assert_ne!(recording.status, Status::Completed);
+            assert_eq!(recording.transcript_model(), Some(Model::LargeV3Turbo));
+        }
+    }
+
+    #[test]
+    fn a_failure_without_an_earlier_transcript_records_no_model() {
+        let (mut library, mut transcriber) = ready_library();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+
+        library.transcription_failed(&recording, "坏了".into(), &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            None
+        );
+    }
+
+    #[test]
+    fn re_transcribing_a_large_v3_transcript_while_turbo_is_current_records_turbo() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+        choose_turbo(&mut library, &mut transcriber);
+
+        library.rerun(&recording, true, &mut transcriber);
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3)
+        );
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn the_transcript_model_survives_a_restart() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        choose_turbo(&mut library, &mut transcriber);
+        library.add(recording.clone(), true, &mut transcriber);
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        let restored = Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
+
+        assert_eq!(
+            restored.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn a_stored_transcript_without_a_recorded_model_reads_as_large_v3() {
+        let json = r#"{"recordings":[
+            {"path":"/a/完成.m4a","status":"Completed","segments":[{"start_ms":0,"end_ms":1,"text":"好"}]},
+            {"path":"/a/失败.m4a","status":"Failed","transcript_stored":true},
+            {"path":"/a/没有.m4a","status":"Failed"},
+            {"path":"/a/等待.m4a","status":"Queued"}
+        ],"selected":null}"#;
+
+        let library = Library::from_json(json).expect("old snapshot");
+
+        let models: Vec<_> = library
+            .recordings()
+            .iter()
+            .map(Recording::transcript_model)
+            .collect();
+        assert_eq!(
+            models,
+            vec![Some(Model::LargeV3), Some(Model::LargeV3), None, None]
+        );
+    }
+
+    #[test]
+    fn the_model_is_shown_only_for_a_finished_recording_with_a_stored_transcript() {
+        let (mut library, mut transcriber) = ready_library();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        let shown = |library: &Library| library.recording(&recording).unwrap().shown_model();
+        assert_eq!(shown(&library), None);
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+        assert_eq!(shown(&library), Some(Model::LargeV3));
+
+        library.rerun(&recording, true, &mut transcriber);
+        assert_eq!(shown(&library), None);
+
+        library.cancel(&recording, &mut transcriber);
+        assert_eq!(shown(&library), Some(Model::LargeV3));
     }
 }

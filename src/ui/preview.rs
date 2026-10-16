@@ -65,6 +65,7 @@ fn fixture(scenario: &str) -> visper::Library {
             "segments": if status == "Queued" { Vec::new() } else { transcript },
             "transcript_stored": status != "Queued", "finished_order": 10,
             "missing": scenario == "missing", "transcription_ms": 248_000,
+            "transcript_model": "LargeV3Turbo",
             "error": if scenario == "failure" { Some("无法解码录音。上次成功保存的转写稿仍然可用。") } else { None },
         }));
         for (index, name) in [
@@ -82,6 +83,8 @@ fn fixture(scenario: &str) -> visper::Library {
                 "segments": segments(), "duration_ms": 2_400_000,
                 "language": "Auto", "finished_order": 4 - index, "transcription_ms": 577_000,
                 "transcript_stored": true,
+                // The first one has no recorded Model: an old Transcript.
+                "transcript_model": if index == 1 { Some("LargeV3Turbo") } else { None },
             }));
         }
         if scenario == "long" {

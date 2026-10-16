@@ -893,7 +893,7 @@ fn sidebar(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(status(recording, palette));
+                .child(status(recording, palette).flex_none());
             let running = timing.filter(|timing| timing.path == recording.path);
             if recording.is_missing() {
                 meta = meta.child(small("· 文件缺失", palette).text_color(rgb(palette.warning)));
@@ -909,6 +909,9 @@ fn sidebar(
                     text.push_str(&format!(" · 用时 {}", duration_label(took)));
                 }
                 meta = meta.child(small(text, palette).min_w_0().truncate());
+            }
+            if let Some(model) = recording.shown_model() {
+                meta = meta.child(model_tag(model, palette));
             }
             copy = copy.child(meta);
             if let Some(progress) = recording.progress() {
@@ -1231,6 +1234,11 @@ fn detail(
                     recording
                         .transcription_ms()
                         .map(|took| small(format!("转写用时 {}", duration_label(took)), palette)),
+                )
+                .children(
+                    recording
+                        .shown_model()
+                        .map(|model| small(model.full_name(), palette)),
                 ),
         )
         .children(
