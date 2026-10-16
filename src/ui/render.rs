@@ -516,6 +516,7 @@ impl Render for VisperWindow {
             }))
             .child(sidebar(
                 &library,
+                window,
                 model_open,
                 &ui,
                 layout,
@@ -785,8 +786,41 @@ fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
         .on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)))
 }
 
+/// How wide `text` draws at `size`.
+fn text_width(text: &str, size: f32, weight: FontWeight, window: &Window) -> f32 {
+    let mut run = window.text_style().to_run(text.len());
+    run.font.weight = weight;
+    let line = window
+        .text_system()
+        .shape_line(text.to_owned().into(), px(size), &[run], None);
+    f32::from(line.width)
+}
+
+/// `text` cut to end in "…" within `width`, by the same `measure` that
+/// sizes the rest of the line. GPUI's own ellipsis is decided at the first
+/// layout pass and keeps that result, so a flex item never gets one.
+fn ellipsize(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= width {
+        return text.to_owned();
+    }
+    let mut kept = text.to_owned();
+    while kept.pop().is_some() {
+        let cut = format!("{}…", kept.trim_end());
+        if measure(&cut) <= width {
+            return cut;
+        }
+    }
+    String::new()
+}
+
+/// What a row takes from the Library's width before its text: the list's
+/// and the row's 12 px padding on both sides, the 20 px icon, its 10 px gap
+/// and the 1 px border.
+const ROW_COPY_INSET: f32 = 24.0 + 24.0 + 20.0 + 10.0 + 1.0;
+
 fn sidebar(
     library: &visper::Library,
+    window: &Window,
     model_open: bool,
     ui: &Ui,
     layout: Layout,
@@ -895,22 +929,43 @@ fn sidebar(
                 .gap(px(6.0))
                 .child(status(recording, palette).flex_none());
             let running = timing.filter(|timing| timing.path == recording.path);
+            let mut text = None;
             if recording.is_missing() {
                 meta = meta.child(small("· 文件缺失", palette).text_color(rgb(palette.warning)));
             } else if let Some(timing) = running {
-                meta = meta.child(
-                    small(format!("· {}", remaining_label(timing)), palette)
-                        .min_w_0()
-                        .truncate(),
-                );
+                text = Some(format!("· {}", remaining_label(timing)));
             } else if let Some(duration) = recording.duration_ms() {
-                let mut text = format!("· {}", duration_label(duration));
+                let mut line = format!("· {}", duration_label(duration));
                 if let Some(took) = recording.transcription_ms() {
-                    text.push_str(&format!(" · 用时 {}", duration_label(took)));
+                    line.push_str(&format!(" · 用时 {}", duration_label(took)));
                 }
-                meta = meta.child(small(text, palette).min_w_0().truncate());
+                text = Some(line);
             }
-            if let Some(model) = recording.shown_model() {
+            let tag = recording.shown_model();
+            if let Some(text) = text {
+                // What the status and the tag leave of the line, so that only
+                // the text gives way, and with an ellipsis.
+                let mut taken = 14.0
+                    + 6.0
+                    + text_width(
+                        recording.status.label(),
+                        m::SMALL_SIZE,
+                        FontWeight::NORMAL,
+                        window,
+                    )
+                    + 6.0;
+                if let Some(model) = tag {
+                    taken += 12.0
+                        + text_width(model.short_name(), 11.0, FontWeight::MEDIUM, window)
+                        + 6.0;
+                }
+                let width = (layout.sidebar - ROW_COPY_INSET - taken).max(0.0);
+                let text = ellipsize(&text, width, |text| {
+                    text_width(text, m::SMALL_SIZE, FontWeight::NORMAL, window)
+                });
+                meta = meta.child(small(text, palette).flex_none());
+            }
+            if let Some(model) = tag {
                 meta = meta.child(model_tag(model, palette));
             }
             copy = copy.child(meta);
@@ -2115,6 +2170,17 @@ mod tests {
             remaining_ms: ms,
             speed: None,
         })
+    }
+
+    #[test]
+    fn a_text_that_does_not_fit_ends_in_an_ellipsis() {
+        let ten_per_char = |text: &str| text.chars().count() as f32 * 10.0;
+        assert_eq!(ellipsize("· 40:00", 70.0, ten_per_char), "· 40:00");
+        assert_eq!(
+            ellipsize("· 40:00 · 用时", 100.0, ten_per_char),
+            "· 40:00 ·…"
+        );
+        assert_eq!(ellipsize("· 40:00", 5.0, ten_per_char), "");
     }
 
     #[test]
