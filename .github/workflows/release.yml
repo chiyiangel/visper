@@ -3,8 +3,8 @@ name: Release
 # Pushing a version tag (v*) builds the packages and publishes a GitHub
 # Release with the built-in GITHUB_TOKEN. workflow_dispatch runs the same
 # builds; a release is created only when the selected ref is a version tag.
-# There is no Developer ID signing or notarization: the macOS disk images are
-# ad hoc signed, and Gatekeeper blocks them until the user allows the app.
+# There is no Developer ID signing or notarization: the macOS disk image is
+# ad hoc signed, and Gatekeeper blocks it until the user allows the app.
 on:
   push:
     tags:
@@ -29,19 +29,9 @@ env:
 
 jobs:
   macos:
-    name: macOS (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    name: macOS (arm64)
+    runs-on: macos-latest
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macos-latest is Apple Silicon. Intel is a separate native image:
-          # whisper.cpp's CMake build does not cross-compile from arm64.
-          - arch: arm64
-            runner: macos-latest
-          - arch: x86_64
-            runner: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,14 +39,15 @@ jobs:
           fetch-depth: 0
 
       # whisper.cpp builds with Metal here; CMake ships with the runner image.
+      # macos-latest is Apple Silicon. The release ships that slice only.
       - uses: Swatinem/rust-cache@v2
 
       - name: Confirm the runner architecture
         run: |
           set -eu
           actual=$(uname -m)
-          if [ "$actual" != "${{ matrix.arch }}" ]; then
-            echo "runner is $actual, expected ${{ matrix.arch }}" >&2
+          if [ "$actual" != "arm64" ]; then
+            echo "runner is $actual, expected arm64" >&2
             exit 1
           fi
 
@@ -67,11 +58,16 @@ jobs:
         run: |
           set -eu
           binary=target/release/bundle/Visper.app/Contents/MacOS/visper
-          echo "slice: $(lipo -archs "$binary")"
+          slice=$(lipo -archs "$binary")
+          echo "slice: $slice"
+          if [ "$slice" != "arm64" ]; then
+            echo "expected an arm64 binary, got: $slice" >&2
+            exit 1
+          fi
           codesign -dv "$binary" 2>&1
-          dmg=(target/release/bundle/Visper-*-${{ matrix.arch }}.dmg)
+          dmg=(target/release/bundle/Visper-*-arm64.dmg)
           if [ ! -f "${dmg[0]}" ]; then
-            echo "missing disk image for ${{ matrix.arch }}" >&2
+            echo "missing arm64 disk image" >&2
             ls -l target/release/bundle >&2
             exit 1
           fi
@@ -79,8 +75,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: visper-macos-${{ matrix.arch }}
-          path: target/release/bundle/Visper-*-${{ matrix.arch }}.dmg
+          name: visper-macos-arm64
+          path: target/release/bundle/Visper-*-arm64.dmg
           retention-days: 14
           if-no-files-found: error
 
@@ -183,28 +179,27 @@ jobs:
             exit 1
           fi
           tag_version="${GITHUB_REF_NAME#v}"
-          for asset in "${assets[@]}"; do
-            case "$asset" in
-              Visper-"$tag_version"-*) ;;
-              *)
-                echo "$asset does not match tag $GITHUB_REF_NAME." >&2
-                echo "Bump version in Cargo.toml to $tag_version before tagging." >&2
-                exit 1
-                ;;
-            esac
-          done
+          printf '%s\n' "${assets[@]}" | sort > actual.txt
+          printf '%s\n' \
+            "Visper-${tag_version}-arm64.dmg" \
+            "Visper-${tag_version}-windows-x86_64.zip" | sort > expected.txt
+          if ! cmp -s actual.txt expected.txt; then
+            echo "release assets must be the Apple Silicon disk image and the Windows zip for $GITHUB_REF_NAME" >&2
+            echo "Bump version in Cargo.toml to $tag_version before tagging." >&2
+            diff -u expected.txt actual.txt >&2 || true
+            exit 1
+          fi
           sha256sum "${assets[@]}" > SHA256SUMS
           ls -lh
           notes=$(mktemp)
           cat >"$notes" <<EOF
           ## macOS
 
-          - \`Visper-${tag_version}-arm64.dmg\` — Apple Silicon
-          - \`Visper-${tag_version}-x86_64.dmg\` — Intel
+          \`Visper-${tag_version}-arm64.dmg\` is the Apple Silicon build.
 
           Open the disk image and drag Visper to Applications.
 
-          These builds are ad hoc signed (\`codesign --sign -\`) and are not notarized. Gatekeeper treats a downloaded copy as unsigned and blocks the first launch.
+          This build is ad hoc signed (\`codesign --sign -\`) and is not notarized. Gatekeeper treats a downloaded copy as unsigned and blocks the first launch.
 
           1. Control-click \`Visper.app\` and choose **Open**, then **Open** again.
           2. If macOS still blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.

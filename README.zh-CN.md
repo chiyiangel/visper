@@ -54,10 +54,9 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 | 包 | 平台 |
 | --- | --- |
 | `Visper-<版本>-arm64.dmg` | Apple Silicon 的 macOS |
-| `Visper-<版本>-x86_64.dmg` | Intel 的 macOS |
 | `Visper-<版本>-windows-x86_64.zip` | x86_64 的 Windows 10/11 |
 
-macOS 磁盘映像是临时（ad hoc）签名，没有公证，所以在构建机以外的 Mac 上会被 Gatekeeper 拦截。把 Visper 拖进“应用程序”后，按住 Control 点按应用，选择“打开”，再点一次“打开”。如果仍然被拦截，到“系统设置 → 隐私与安全性”里允许。如果系统提示应用已损坏，清掉下载隔离属性：
+磁盘映像是临时（ad hoc）签名，没有公证，所以在构建机以外的 Mac 上会被 Gatekeeper 拦截。把 Visper 拖进“应用程序”后，按住 Control 点按应用，选择“打开”，再点一次“打开”。如果仍然被拦截，到“系统设置 → 隐私与安全性”里允许。如果系统提示应用已损坏，清掉下载隔离属性：
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Visper.app
@@ -97,7 +96,7 @@ Windows 的 zip 里是 `visper.exe` 和一份简短说明。它同样需要 `vul
 scripts/bundle-macos.sh --dmg
 ```
 
-产物 `Visper.app` 和 `Visper-<版本>-<架构>.dmg` 在 `target/release/bundle/` 下（Apple Silicon 为 `arm64`，Intel 为 `x86_64`）。它使用临时（ad hoc）签名，在构建它的 Mac 上可以直接打开；在其他 Mac 上，需要先在“系统设置 → 隐私与安全性”里允许。要对外分发，把 `VISPER_SIGN_IDENTITY` 设为 Developer ID Application 证书，把 `VISPER_NOTARY_PROFILE` 设为 `xcrun notarytool store-credentials` 保存的配置名：脚本会用强化运行时签名，并对磁盘映像做公证和装订。CI 会构建 Apple Silicon 的磁盘映像，作为 `visper-macos-arm64` artifact。发布工作流在各自的原生 runner 上构建两种架构。
+在 Apple Silicon 上，产物 `Visper.app` 和 `Visper-<版本>-arm64.dmg` 在 `target/release/bundle/` 下。它使用临时（ad hoc）签名，在构建它的 Mac 上可以直接打开；在其他 Mac 上，需要先在“系统设置 → 隐私与安全性”里允许。要对外分发，把 `VISPER_SIGN_IDENTITY` 设为 Developer ID Application 证书，把 `VISPER_NOTARY_PROFILE` 设为 `xcrun notarytool store-credentials` 保存的配置名：脚本会用强化运行时签名，并对磁盘映像做公证和装订。CI 会构建同样的磁盘映像，作为 `visper-macos-arm64` artifact；打版本标签时会把它发布到 Release。
 
 ### Windows
 

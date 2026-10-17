@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
-- GitHub Releases for macOS and Windows. Pushing a `v*` tag builds an Apple Silicon disk image, an Intel disk image, and a Windows zip, and publishes them on the release. The macOS builds are ad hoc signed and not notarized.
+- GitHub Releases for macOS and Windows. Pushing a `v*` tag builds an Apple Silicon disk image and a Windows x86_64 zip, and publishes them on the release. The macOS build is ad hoc signed and not notarized.
 - Windows support (x86_64, MSVC): the same Vulkan inference with CPU fallback, data under `%LOCALAPPDATA%\Visper`, and one instance per user. The exe needs a GPU driver that provides `vulkan-1.dll` and the Visual C++ runtime.
 - GitHub Actions CI on Windows and macOS. The Windows job uploads `visper.exe` as an artifact, the macOS job a disk image.
 - `scripts/bundle-macos.sh` builds `Visper.app` and a `.dmg`: ad hoc signed by default, or signed with a Developer ID, hardened runtime and notarization when configured. The bundle is localized in Simplified Chinese and opens `m4a`, `mp3`, `wav`, `flac` and `aac` files as an alternate app.

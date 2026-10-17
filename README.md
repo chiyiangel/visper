@@ -54,10 +54,9 @@ Prebuilt packages are attached to [GitHub Releases](https://github.com/chiyiange
 | Package | Platform |
 | --- | --- |
 | `Visper-<version>-arm64.dmg` | macOS on Apple Silicon |
-| `Visper-<version>-x86_64.dmg` | macOS on Intel |
 | `Visper-<version>-windows-x86_64.zip` | Windows 10/11 on x86_64 |
 
-The macOS disk images are signed ad hoc and are not notarized, so Gatekeeper blocks them on any Mac other than the build machine. Drag Visper to Applications, then control-click the app and choose Open, then Open again. If macOS still blocks it, allow it under System Settings → Privacy & Security. If it reports the app is damaged, clear the download quarantine:
+The disk image is signed ad hoc and is not notarized, so Gatekeeper blocks it on any Mac other than the build machine. Drag Visper to Applications, then control-click the app and choose Open, then Open again. If macOS still blocks it, allow it under System Settings → Privacy & Security. If it reports the app is damaged, clear the download quarantine:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Visper.app
@@ -97,7 +96,7 @@ The first build compiles whisper.cpp and takes several minutes. On first launch 
 scripts/bundle-macos.sh --dmg
 ```
 
-This writes `Visper.app` and `Visper-<version>-<arch>.dmg` to `target/release/bundle/` (`arm64` on Apple Silicon, `x86_64` on Intel). It is signed ad hoc, so it opens on the Mac that built it; elsewhere macOS blocks it until it is allowed under System Settings → Privacy & Security. To hand it out, set `VISPER_SIGN_IDENTITY` to a Developer ID Application certificate and `VISPER_NOTARY_PROFILE` to a profile saved by `xcrun notarytool store-credentials`: the script then signs with the hardened runtime and notarizes and staples the disk image. CI builds the Apple Silicon disk image as the `visper-macos-arm64` artifact. The release workflow builds both architectures, each on a native runner.
+This writes `Visper.app` and `Visper-<version>-arm64.dmg` to `target/release/bundle/` on Apple Silicon. It is signed ad hoc, so it opens on the Mac that built it; elsewhere macOS blocks it until it is allowed under System Settings → Privacy & Security. To hand it out, set `VISPER_SIGN_IDENTITY` to a Developer ID Application certificate and `VISPER_NOTARY_PROFILE` to a profile saved by `xcrun notarytool store-credentials`: the script then signs with the hardened runtime and notarizes and staples the disk image. CI builds the same disk image as the `visper-macos-arm64` artifact, and a version tag publishes it on the release.
 
 ### Windows
 
