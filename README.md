@@ -47,9 +47,25 @@ Visper deliberately does not do live microphone capture, translation, summaries,
 - On Windows, a GPU driver that provides Vulkan (`vulkan-1.dll`; current NVIDIA, AMD and Intel drivers all do) and the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist). Without `vulkan-1.dll` Visper does not start.
 - To build: Rust stable (installed automatically through `rust-toolchain.toml`), plus the platform tools below
 
-## Build and run
+## Download
 
-There are no prebuilt releases yet, so build from source.
+Prebuilt packages are attached to [GitHub Releases](https://github.com/chiyiangel/visper/releases) when a version tag (`v*`) is pushed. The [release workflow](.github/workflows/release.yml) builds them on native runners. Nothing is published until that first tag; until then, build from source.
+
+| Package | Platform |
+| --- | --- |
+| `Visper-<version>-arm64.dmg` | macOS on Apple Silicon |
+| `Visper-<version>-x86_64.dmg` | macOS on Intel |
+| `Visper-<version>-windows-x86_64.zip` | Windows 10/11 on x86_64 |
+
+The macOS disk images are signed ad hoc and are not notarized, so Gatekeeper blocks them on any Mac other than the build machine. Drag Visper to Applications, then control-click the app and choose Open, then Open again. If macOS still blocks it, allow it under System Settings → Privacy & Security. If it reports the app is damaged, clear the download quarantine:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Visper.app
+```
+
+The Windows zip is `visper.exe` plus a short readme. It needs `vulkan-1.dll` and the Visual C++ Redistributable, as above. `<version>` is the `version` in `Cargo.toml` and matches the tag: a tag `v1.2.3` publishes `Visper-1.2.3-…`.
+
+## Build and run
 
 ### macOS
 
@@ -81,7 +97,7 @@ The first build compiles whisper.cpp and takes several minutes. On first launch 
 scripts/bundle-macos.sh --dmg
 ```
 
-This writes `Visper.app` and `Visper-<version>-arm64.dmg` to `target/release/bundle/`. It is signed ad hoc, so it opens on the Mac that built it; elsewhere macOS blocks it until it is allowed under System Settings → Privacy & Security. To hand it out, set `VISPER_SIGN_IDENTITY` to a Developer ID Application certificate and `VISPER_NOTARY_PROFILE` to a profile saved by `xcrun notarytool store-credentials`: the script then signs with the hardened runtime and notarizes and staples the disk image. CI builds the same disk image as the `visper-macos-arm64` artifact.
+This writes `Visper.app` and `Visper-<version>-<arch>.dmg` to `target/release/bundle/` (`arm64` on Apple Silicon, `x86_64` on Intel). It is signed ad hoc, so it opens on the Mac that built it; elsewhere macOS blocks it until it is allowed under System Settings → Privacy & Security. To hand it out, set `VISPER_SIGN_IDENTITY` to a Developer ID Application certificate and `VISPER_NOTARY_PROFILE` to a profile saved by `xcrun notarytool store-credentials`: the script then signs with the hardened runtime and notarizes and staples the disk image. CI builds the Apple Silicon disk image as the `visper-macos-arm64` artifact. The release workflow builds both architectures, each on a native runner.
 
 ### Windows
 
@@ -106,7 +122,7 @@ This writes `Visper.app` and `Visper-<version>-arm64.dmg` to `target/release/bun
    cd visper && cargo run --release
    ```
 
-Only `x86_64-pc-windows-msvc` is supported. Every push and pull request also builds `visper.exe` in [CI](.github/workflows/ci.yml); it is attached to the run as the `visper-windows-x86_64` artifact.
+Only `x86_64-pc-windows-msvc` is supported. Every push and pull request also builds `visper.exe` in [CI](.github/workflows/ci.yml); it is attached to the run as the `visper-windows-x86_64` artifact. A version tag zips that exe (and a short readme) and publishes it on the release.
 
 ### Where data lives
 
