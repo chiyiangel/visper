@@ -9,11 +9,6 @@ on:
   push:
     tags:
       - "v*"
-    # Verification build for this branch. Artifacts only; publish stays
-    # skipped because the ref is not a tag. Remove this branches filter
-    # once that run is green.
-    branches:
-      - "cursor/release-binaries-a9ab"
   workflow_dispatch:
 
 permissions:
