@@ -1,6 +1,7 @@
 //! The AppKit pieces GPUI leaves out: the Dock icon of an unbundled run, the
 //! standard About panel, the Window and Help menus, and a window frame that
-//! survives relaunch. Every function is a no-op on other platforms.
+//! survives relaunch, and the Reduce motion preference. Every function is a
+//! no-op, or false, on other platforms.
 
 // objc 0.2's `msg_send!` tests `feature = "cargo-clippy"`, which Cargo no
 // longer declares.
@@ -141,6 +142,22 @@ pub fn remember_frame(window: &gpui::Window) {
     }
 }
 
+/// Whether the user turned on Reduce motion in the system's Accessibility
+/// settings, which asks apps to drop their own animations.
+#[cfg(target_os = "macos")]
+pub fn reduce_motion() -> bool {
+    use cocoa::base::{BOOL, YES, id};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    // SAFETY: `sharedWorkspace` is a process-wide singleton and the property
+    // is a plain BOOL getter; neither needs the main thread.
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let reduce: BOOL = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduce == YES
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn set_icon() {}
 
@@ -152,3 +169,8 @@ pub fn show_about() {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn remember_frame(_window: &gpui::Window) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn reduce_motion() -> bool {
+    false
+}

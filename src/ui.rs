@@ -14,11 +14,12 @@ mod motion;
 #[cfg(debug_assertions)]
 mod preview;
 mod render;
+mod scrollbar;
 #[cfg(debug_assertions)]
 pub use preview::open_preview;
 pub use render::open;
 
-use crate::download::{DownloadEvent, WeightDownloader};
+use crate::download::{DownloadEvent, WeightDownloader, weight_path};
 use crate::markdown::MarkdownFile;
 use crate::playback::{PlaybackState, Player};
 use crate::store::Store;
@@ -31,10 +32,12 @@ pub struct VisperWindow {
     exported: Option<PathBuf>,
     /// The 更多 menu holding 从资料库移除 is open.
     more_open: bool,
+    /// The Model popover above the Library footer is open.
+    model_open: bool,
     player: Player,
     was_playing: bool,
     store: Store,
-    downloader: WeightDownloader,
+    downloader: Box<dyn visper::Downloader>,
     download_events: Receiver<DownloadEvent>,
     transcriber: WhisperTranscriber,
     transcription_events: Receiver<TranscriptionEvent>,
@@ -42,6 +45,9 @@ pub struct VisperWindow {
     selection: Rc<RefCell<render::TextSelection>>,
     selection_focus: FocusHandle,
     transcript_scroll: ScrollHandle,
+    transcript_bar: scrollbar::Scrollbar,
+    library_scroll: ScrollHandle,
+    library_bar: scrollbar::Scrollbar,
     motion: motion::Motion,
     clock: Option<TranscriptionClock>,
     #[cfg(debug_assertions)]
@@ -55,22 +61,22 @@ pub struct VisperWindow {
 }
 
 impl VisperWindow {
-    pub fn new(store: Store, weight: PathBuf, cx: &mut Context<Self>) -> Self {
-        Self::build(store, weight, None, cx)
+    pub fn new(store: Store, support: PathBuf, cx: &mut Context<Self>) -> Self {
+        Self::build(store, support, None, cx)
     }
 
     fn build(
         mut store: Store,
-        weight: PathBuf,
+        support: PathBuf,
         preview_library: Option<visper::Library>,
         cx: &mut Context<Self>,
     ) -> Self {
         let preview = preview_library.is_some();
         let mut library = preview_library.unwrap_or_else(|| store.load());
         let (sender, download_events) = channel();
-        let mut downloader = WeightDownloader::new(weight.clone(), sender);
+        let mut downloader = Box::new(WeightDownloader::new(support.clone(), sender));
         let (sender, transcription_events) = channel();
-        let mut transcriber = WhisperTranscriber::new(weight.clone(), sender);
+        let mut transcriber = WhisperTranscriber::new(support.clone(), sender);
         let paths: Vec<PathBuf> = library
             .recordings()
             .iter()
@@ -80,7 +86,11 @@ impl VisperWindow {
             for path in paths {
                 library.file_checked(&path, file_opens(&path), &mut transcriber);
             }
-            library.prepare_weight(weight.is_file(), &mut downloader, &mut transcriber);
+            let on_disk: Vec<_> = visper::Model::ALL
+                .into_iter()
+                .filter(|model| weight_path(&support, *model).is_file())
+                .collect();
+            library.prepare(&on_disk, &mut *downloader, &mut transcriber);
             store.save(&library);
         }
         cx.spawn(async move |this, cx| {
@@ -97,6 +107,7 @@ impl VisperWindow {
             notice: None,
             exported: None,
             more_open: false,
+            model_open: false,
             player: Player::default(),
             was_playing: false,
             store,
@@ -108,6 +119,9 @@ impl VisperWindow {
             selection: Rc::default(),
             selection_focus: cx.focus_handle(),
             transcript_scroll: ScrollHandle::new(),
+            transcript_bar: scrollbar::Scrollbar::new("transcript-scrollbar"),
+            library_scroll: ScrollHandle::new(),
+            library_bar: scrollbar::Scrollbar::new("library-scrollbar"),
             motion: motion::Motion::default(),
             clock: None,
             #[cfg(debug_assertions)]
@@ -132,11 +146,17 @@ impl VisperWindow {
         while let Ok(event) = self.download_events.try_recv() {
             changed = true;
             match event {
-                DownloadEvent::Progressed { received, total } => {
-                    self.library.download_progressed(received, total)
+                DownloadEvent::Progressed {
+                    model,
+                    received,
+                    total,
+                } => self.library.download_progressed(model, received, total),
+                DownloadEvent::Failed { model, error } => {
+                    self.library.download_failed(model, error)
                 }
-                DownloadEvent::Failed(error) => self.library.download_failed(error),
-                DownloadEvent::Finished => self.library.download_finished(&mut self.transcriber),
+                DownloadEvent::Finished { model } => {
+                    self.library.download_finished(model, &mut self.transcriber)
+                }
             }
         }
         while let Ok(event) = self.transcription_events.try_recv() {
@@ -549,8 +569,51 @@ impl VisperWindow {
         cx.notify();
     }
 
+    /// Picks the Model later Transcriptions use, fetching its weight when it
+    /// is not stored. The popover closes either way.
+    fn choose_model(&mut self, model: visper::Model, cx: &mut Context<Self>) {
+        self.model_open = false;
+        self.change_model(cx, |library, downloader, transcriber| {
+            library.choose(model, downloader, transcriber)
+        });
+    }
+
+    /// 切回: makes the Model that is on disk current again, abandoning the
+    /// download that failed or still runs.
+    fn switch_back(&mut self, model: visper::Model, cx: &mut Context<Self>) {
+        self.change_model(cx, |library, downloader, transcriber| {
+            library.switch_back(model, downloader, transcriber);
+        });
+    }
+
+    fn change_model(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(
+            &mut visper::Library,
+            &mut dyn visper::Downloader,
+            &mut dyn visper::Transcriber,
+        ),
+    ) {
+        #[cfg(debug_assertions)]
+        if self.preview {
+            change(&mut self.library, &mut preview::Noop, &mut preview::Noop);
+            cx.notify();
+            return;
+        }
+        // As in `rerun`: an earlier run's events must not reach a new one.
+        self.take_events(cx);
+        change(
+            &mut self.library,
+            &mut *self.downloader,
+            &mut self.transcriber,
+        );
+        self.store.save(&self.library);
+        cx.notify();
+    }
+
     fn retry_download(&mut self, cx: &mut Context<Self>) {
-        self.library.retry_download(&mut self.downloader);
+        self.library.retry_download(&mut *self.downloader);
         cx.notify();
     }
 
@@ -579,6 +642,7 @@ impl VisperWindow {
                 Some(format!("「{name}」已经在等待中，没有再加一条。"))
             }
             visper::AddOutcome::AlreadyTranscribing => Some(format!("「{name}」正在转写。")),
+            visper::AddOutcome::NoModelOnDisk => Some("模型下载完成后才能加入录音".into()),
             visper::AddOutcome::Rejected(reason) => Some(reason),
         };
         if self.library.selected().map(|recording| &recording.path) != previous_selection.as_ref() {
@@ -591,6 +655,9 @@ impl VisperWindow {
     }
 
     pub fn pick_file(&mut self, cx: &mut Context<Self>) {
+        if !self.library.can_add() {
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,

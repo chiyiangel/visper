@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use crate::download::weight_path;
 use rubato::{FftFixedInOut, Resampler};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
@@ -14,7 +16,7 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use visper::{Language, Segment};
+use visper::{Language, Model, Segment};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
@@ -53,9 +55,19 @@ pub enum TranscriptionEvent {
     },
 }
 
+/// How long `shutdown` waits for the worker to free the Model.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
+enum Message {
+    Transcribe(Request),
+    /// Drop the Model and stop; answered once it is freed.
+    Shutdown(Sender<()>),
+}
+
 struct Request {
     path: PathBuf,
     language: Language,
+    model: Model,
     cancel: Arc<Cancel>,
 }
 
@@ -87,18 +99,18 @@ impl Cancel {
     }
 }
 
-/// Owns one worker thread that keeps the large-v3 weight loaded between
+/// Owns one worker thread that keeps the weight of the Model loaded between
 /// Recordings and runs one Transcription at a time.
 pub struct WhisperTranscriber {
-    requests: Sender<Request>,
+    requests: Sender<Message>,
     /// Cancels the Transcription that was started last.
     cancel: Arc<Cancel>,
 }
 
 impl WhisperTranscriber {
-    pub fn new(weight: PathBuf, events: Sender<TranscriptionEvent>) -> Self {
+    pub fn new(support: PathBuf, events: Sender<TranscriptionEvent>) -> Self {
         let (requests, pending) = channel();
-        std::thread::spawn(move || work(weight, pending, events));
+        std::thread::spawn(move || work(support, pending, events));
         Self {
             requests,
             cancel: Arc::default(),
@@ -107,24 +119,53 @@ impl WhisperTranscriber {
 }
 
 impl visper::Transcriber for WhisperTranscriber {
-    fn start(&mut self, path: &Path, language: Language) {
+    fn start(&mut self, path: &Path, language: Language, model: Model) {
         self.cancel = Arc::default();
-        let _ = self.requests.send(Request {
+        let _ = self.requests.send(Message::Transcribe(Request {
             path: path.to_path_buf(),
             language,
+            model,
             cancel: self.cancel.clone(),
-        });
+        }));
     }
 
     fn cancel(&mut self) {
         self.cancel.raise();
     }
+
+    /// whisper.cpp keeps the Model's Metal buffers registered until the
+    /// context is freed, and ggml asserts at process exit that none are left.
+    /// The worker only blocks waiting for requests, so it never frees the
+    /// context by itself; this makes it do so, and waits for it.
+    fn shutdown(&mut self) {
+        self.cancel.raise();
+        let (freed, released) = channel();
+        if self.requests.send(Message::Shutdown(freed)).is_ok() {
+            let _ = released.recv_timeout(SHUTDOWN_WAIT);
+        }
+    }
 }
 
-fn work(weight: PathBuf, pending: Receiver<Request>, events: Sender<TranscriptionEvent>) {
+fn work(support: PathBuf, pending: Receiver<Message>, events: Sender<TranscriptionEvent>) {
     whisper_rs::install_logging_hooks();
     let mut gpu = None;
-    for request in pending {
+    let mut loaded = None;
+    for message in pending {
+        let request = match message {
+            Message::Transcribe(request) => request,
+            Message::Shutdown(freed) => {
+                drop(gpu);
+                let _ = freed.send(());
+                return;
+            }
+        };
+        // One weight in memory at a time: a request for the other Model
+        // drops the context and loads that weight.
+        if loaded != Some(request.model) {
+            gpu = None;
+            loaded = Some(request.model);
+        }
+        let weight = weight_path(&support, request.model);
         let outcome = transcribe(&weight, &mut gpu, &request, &events);
         let path = request.path.clone();
         request.cancel.send(

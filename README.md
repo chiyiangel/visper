@@ -130,7 +130,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-Debug builds can open isolated preview windows that use sample data instead of your library and never download the model. Scenarios are `empty`, `transcribing`, `completed`, `failure`, `missing` and `long`:
+Debug builds can open isolated preview windows that use sample data instead of your library and never download the model. Scenarios are `empty`, `transcribing`, `completed`, `failure`, `missing`, `long`, `model-popover`, `model-download`, `model-download-failed`, `first-launch`, `first-launch-download` and `first-launch-failed` (append `-dark` for dark mode):
 
 ```bash
 cargo run -- --preview completed

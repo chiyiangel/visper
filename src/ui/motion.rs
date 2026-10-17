@@ -27,7 +27,7 @@ struct State {
     pill_from: Option<(usize, Instant)>,
 }
 
-fn ease_out(elapsed: Duration, length: Duration) -> f32 {
+pub(super) fn ease_out(elapsed: Duration, length: Duration) -> f32 {
     let t = (elapsed.as_secs_f32() / length.as_secs_f32()).clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
 }

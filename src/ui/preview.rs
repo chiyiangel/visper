@@ -1,16 +1,18 @@
 //! Isolated debug-only scenarios for visual review. No model download or user Library.
 use super::{PlaybackState, Store, VisperWindow, render};
-use gpui::{App, WindowAppearance, WindowHandle, px, size};
+use gpui::{App, WindowAppearance, WindowHandle, point, px, size};
 use serde_json::json;
 use std::path::Path;
 
-struct Noop;
+pub(super) struct Noop;
 impl visper::Downloader for Noop {
-    fn start(&mut self) {}
+    fn start(&mut self, _: visper::Model) {}
+    fn abandon(&mut self, _: visper::Model) {}
 }
 impl visper::Transcriber for Noop {
-    fn start(&mut self, _: &Path, _: visper::Language) {}
+    fn start(&mut self, _: &Path, _: visper::Language, _: visper::Model) {}
     fn cancel(&mut self) {}
+    fn shutdown(&mut self) {}
 }
 
 /// The selected Recording in every scenario.
@@ -45,8 +47,9 @@ fn segments() -> Vec<serde_json::Value> {
 fn fixture(scenario: &str) -> visper::Library {
     let path = RECORDING;
     let mut rows = Vec::new();
-    if scenario != "empty" {
-        let status = if scenario == "transcribing" {
+    let blank = scenario == "empty" || scenario.starts_with("first-launch");
+    if !blank {
+        let status = if scenario == "transcribing" || scenario.starts_with("model-download") {
             "Queued"
         } else if scenario == "failure" {
             "Failed"
@@ -62,9 +65,10 @@ fn fixture(scenario: &str) -> visper::Library {
         }
         rows.push(json!({
             "path": path, "status": status, "language": "Auto", "duration_ms": 1_085_000,
-            "segments": if scenario == "transcribing" { Vec::new() } else { transcript },
-            "transcript_stored": scenario != "transcribing", "finished_order": 10,
+            "segments": if status == "Queued" { Vec::new() } else { transcript },
+            "transcript_stored": status != "Queued", "finished_order": 10,
             "missing": scenario == "missing", "transcription_ms": 248_000,
+            "transcript_model": "LargeV3Turbo",
             "error": if scenario == "failure" { Some("无法解码录音。上次成功保存的转写稿仍然可用。") } else { None },
         }));
         for (index, name) in [
@@ -82,6 +86,8 @@ fn fixture(scenario: &str) -> visper::Library {
                 "segments": segments(), "duration_ms": 2_400_000,
                 "language": "Auto", "finished_order": 4 - index, "transcription_ms": 577_000,
                 "transcript_stored": true,
+                // The first one has no recorded Model: an old Transcript.
+                "transcript_model": if index == 1 { Some("LargeV3Turbo") } else { None },
             }));
         }
         if scenario == "long" {
@@ -105,10 +111,31 @@ fn fixture(scenario: &str) -> visper::Library {
         .to_string(),
     )
     .expect("valid preview Library");
-    let mut port = Noop;
-    library.prepare_weight(scenario != "empty", &mut port, &mut Noop);
-    if scenario == "empty" {
-        library.download_progressed(1_795_000_000, 3_095_033_483);
+    let on_disk = if scenario.starts_with("first-launch") {
+        vec![]
+    } else {
+        vec![visper::Model::LargeV3]
+    };
+    if scenario == "model-download" || scenario == "model-download-failed" {
+        // Chosen before the queue starts, so the Queued Recording waits.
+        library.choose(visper::Model::LargeV3Turbo, &mut Noop, &mut Noop);
+    }
+    library.prepare(&on_disk, &mut Noop, &mut Noop);
+    if scenario == "first-launch-download" || scenario == "first-launch-failed" {
+        // The click on a card, without the network behind it.
+        library.choose(visper::Model::LargeV3, &mut Noop, &mut Noop);
+    }
+    if scenario == "first-launch-download" {
+        library.download_progressed(visper::Model::LargeV3, 1_795_000_000, 3_095_033_483);
+    } else if scenario == "first-launch-failed" {
+        library.download_failed(visper::Model::LargeV3, "连接下载地址失败：网络中断".into());
+    } else if scenario == "model-download-failed" {
+        library.download_failed(
+            visper::Model::LargeV3Turbo,
+            "连接下载地址失败：网络中断".into(),
+        );
+    } else if scenario == "model-download" {
+        library.download_progressed(visper::Model::LargeV3Turbo, 640_000_000, 1_624_555_275);
     } else if scenario == "transcribing" {
         for value in segments() {
             let segment: visper::Segment = serde_json::from_value(value).expect("preview Segment");
@@ -129,7 +156,7 @@ pub fn open_preview(scenario: &str, cx: &mut App) -> WindowHandle<VisperWindow> 
     let window = render::open_with(cx, move |cx| {
         let mut view = VisperWindow::build(
             store,
-            std::env::temp_dir().join("visper-preview-no-model.bin"),
+            std::env::temp_dir().join("visper-preview-no-model"),
             Some(library),
             cx,
         );
@@ -138,6 +165,17 @@ pub fn open_preview(scenario: &str, cx: &mut App) -> WindowHandle<VisperWindow> 
         } else {
             WindowAppearance::Light
         });
+        view.model_open = scenario == "model-popover";
+        if scenario == "long" {
+            // Both lists part-way down, with their bars on show; the
+            // VISPER_PREVIEW_BAR=hot variant draws them as if hovered.
+            view.transcript_scroll
+                .set_offset(point(px(0.0), px(-6_000.0)));
+            view.library_scroll.set_offset(point(px(0.0), px(-1_200.0)));
+            let hot = std::env::var("VISPER_PREVIEW_BAR").is_ok_and(|bar| bar == "hot");
+            view.transcript_bar.pin(hot);
+            view.library_bar.pin(hot);
+        }
         if scenario == "transcribing" {
             view.clock = Some(super::TranscriptionClock::new(
                 RECORDING.into(),

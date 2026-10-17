@@ -160,6 +160,14 @@ pub struct Recording {
     /// How long the last successful Transcription took.
     #[serde(default)]
     transcription_ms: Option<u64>,
+    /// The Model that produced `segments`. Missing in a Transcript stored
+    /// before there was a choice: that was Large v3.
+    #[serde(default)]
+    transcript_model: Option<Model>,
+    /// The Model the running Transcription started with, which may no
+    /// longer be the current one.
+    #[serde(skip)]
+    transcribing_model: Option<Model>,
     /// What the running Transcription has produced so far.
     #[serde(skip)]
     live: Vec<Segment>,
@@ -274,6 +282,18 @@ impl Recording {
     pub fn duration_ms(&self) -> Option<u64> {
         self.duration_ms
     }
+
+    /// The Model of the stored Transcript, if there is one.
+    pub fn transcript_model(&self) -> Option<Model> {
+        self.transcript_stored
+            .then(|| self.transcript_model.unwrap_or(Model::LargeV3))
+    }
+
+    /// The Model to show beside a finished Recording: the stored
+    /// Transcript's, but not while a new Transcription is queued or running.
+    pub fn shown_model(&self) -> Option<Model> {
+        self.transcript_model().filter(|_| self.is_finished())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,13 +301,62 @@ pub enum AddOutcome {
     Queued,
     AlreadyQueued,
     AlreadyTranscribing,
+    /// No Model is on disk yet, so nothing can be transcribed.
+    NoModelOnDisk,
     Rejected(String),
 }
 
-/// Fetches the Whisper weight in the background and reports back through
+/// A Whisper model Visper can transcribe with (ADR 0004). Each one is a
+/// weight file that is downloaded once and then kept on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Model {
+    LargeV3,
+    LargeV3Turbo,
+}
+
+impl Model {
+    /// In the order the Model popover lists them.
+    pub const ALL: [Model; 2] = [Model::LargeV3, Model::LargeV3Turbo];
+
+    pub fn full_name(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "Large v3",
+            Model::LargeV3Turbo => "Large v3 Turbo",
+        }
+    }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "Large",
+            Model::LargeV3Turbo => "Turbo",
+        }
+    }
+
+    /// The weight's file name, both on disk and in the download repository.
+    pub fn weight_file(self) -> &'static str {
+        match self {
+            Model::LargeV3 => "ggml-large-v3.bin",
+            Model::LargeV3Turbo => "ggml-large-v3-turbo.bin",
+        }
+    }
+
+    /// Approximate size of the weight in bytes, for when the server sends
+    /// no length.
+    pub fn bytes(self) -> u64 {
+        match self {
+            Model::LargeV3 => 3_095_033_483,
+            Model::LargeV3Turbo => 1_624_555_275,
+        }
+    }
+}
+
+/// Fetches the weight of a Model in the background and reports back through
 /// the `download_*` actions on [`Library`].
 pub trait Downloader {
-    fn start(&mut self);
+    fn start(&mut self, model: Model);
+    /// Stops the download of `model` and deletes its partial file. Nothing
+    /// more is reported for it.
+    fn abandon(&mut self, model: Model);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,30 +385,45 @@ pub enum ExportOutcome {
 /// Runs one Transcription in the background and reports back through the
 /// `transcription_*` actions on [`Library`].
 pub trait Transcriber {
-    fn start(&mut self, path: &Path, language: Language);
+    fn start(&mut self, path: &Path, language: Language, model: Model);
     /// Cancels the Transcription that was started last.
     fn cancel(&mut self);
+    /// Cancels it and releases everything the Transcriber holds, such as a
+    /// loaded Model, before the process exits. Nothing is started after it.
+    fn shutdown(&mut self);
 }
 
+/// The one weight being fetched, or the last fetch that failed. A switch
+/// to another Model abandons it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Weight {
-    /// Not checked yet: [`Library::prepare_weight`] has not run.
+pub enum Download {
     #[default]
-    Absent,
-    Downloading {
+    Idle,
+    Running {
+        model: Model,
         received: u64,
         total: u64,
     },
-    Failed(String),
-    Ready,
+    Failed {
+        model: Model,
+        error: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Library {
     recordings: Vec<Recording>,
     selected: Option<PathBuf>,
+    /// The Model that Transcriptions starting from now on use. Missing in a
+    /// library saved before the choice existed.
+    #[serde(default)]
+    model: Option<Model>,
+    /// Which weights are stored; told at [`Library::prepare`] and kept up to
+    /// date by finished downloads.
     #[serde(skip)]
-    weight: Weight,
+    on_disk: Vec<Model>,
+    #[serde(skip)]
+    download: Download,
     #[serde(default)]
     finished_count: u64,
     /// Set by [`Library::quit`]; from then on nothing starts.
@@ -352,61 +436,147 @@ impl Library {
         Self {
             recordings: Vec::new(),
             selected: None,
-            weight: Weight::Absent,
+            model: None,
+            on_disk: Vec::new(),
+            download: Download::Idle,
             finished_count: 0,
             quitting: false,
         }
     }
 
-    pub fn weight(&self) -> &Weight {
-        &self.weight
+    pub fn model(&self) -> Option<Model> {
+        self.model
     }
 
-    pub fn prepare_weight(
+    pub fn download(&self) -> &Download {
+        &self.download
+    }
+
+    pub fn is_on_disk(&self, model: Model) -> bool {
+        self.on_disk.contains(&model)
+    }
+
+    /// Whether a Recording can be added: at least one Model is on disk. Holds
+    /// while the other Model downloads.
+    pub fn can_add(&self) -> bool {
+        !self.on_disk.is_empty()
+    }
+
+    /// Whether the current Model's weight is on disk, so Queued Recordings
+    /// can start.
+    pub fn is_ready(&self) -> bool {
+        self.model.is_some_and(|model| self.is_on_disk(model))
+    }
+
+    /// Run once at startup, with the Models whose weight is stored.
+    pub fn prepare(
         &mut self,
-        stored: bool,
+        on_disk: &[Model],
         downloader: &mut dyn Downloader,
         transcriber: &mut dyn Transcriber,
     ) {
-        if stored {
-            self.weight = Weight::Ready;
+        self.on_disk = on_disk.to_vec();
+        // Large v3 was the only Model before there was a choice, so its
+        // weight on disk is the choice. Without it nothing is chosen, and
+        // nothing downloads until the user picks.
+        if self.model.is_none() && self.is_on_disk(Model::LargeV3) {
+            self.model = Some(Model::LargeV3);
+        }
+        match self.model {
+            Some(model) if self.is_on_disk(model) => self.start_next(transcriber),
+            Some(model) => self.start_download(model, downloader),
+            None => {}
+        }
+    }
+
+    /// Makes `model` the one later Transcriptions use, fetching its weight
+    /// first when it is not stored. A running Transcription is left alone,
+    /// and a download of the other Model is abandoned: only one is in flight.
+    pub fn choose(
+        &mut self,
+        model: Model,
+        downloader: &mut dyn Downloader,
+        transcriber: &mut dyn Transcriber,
+    ) {
+        if self.model == Some(model) {
+            return;
+        }
+        self.model = Some(model);
+        match self.download {
+            Download::Running { model: running, .. } if running != model => {
+                downloader.abandon(running);
+                self.download = Download::Idle;
+            }
+            // A failure of the other Model is no longer about the choice.
+            Download::Failed { model: failed, .. } if failed != model => {
+                self.download = Download::Idle;
+            }
+            _ => {}
+        }
+        if self.is_on_disk(model) {
             self.start_next(transcriber);
-        } else {
-            self.start_download(downloader);
+        } else if !self.is_downloading(model) {
+            self.start_download(model, downloader);
         }
     }
 
-    pub fn download_progressed(&mut self, received: u64, total: u64) {
-        if self.is_downloading() {
-            self.weight = Weight::Downloading { received, total };
+    /// Makes a Model that is on disk current again and lets the queue run.
+    /// Refused (false) for a Model that is not on disk.
+    pub fn switch_back(
+        &mut self,
+        model: Model,
+        downloader: &mut dyn Downloader,
+        transcriber: &mut dyn Transcriber,
+    ) -> bool {
+        if !self.is_on_disk(model) {
+            return false;
+        }
+        self.choose(model, downloader, transcriber);
+        true
+    }
+
+    pub fn download_progressed(&mut self, model: Model, received: u64, total: u64) {
+        if self.is_downloading(model) {
+            self.download = Download::Running {
+                model,
+                received,
+                total,
+            };
         }
     }
 
-    pub fn download_failed(&mut self, error: String) {
-        if self.is_downloading() {
-            self.weight = Weight::Failed(error);
+    pub fn download_failed(&mut self, model: Model, error: String) {
+        if self.is_downloading(model) {
+            self.download = Download::Failed { model, error };
         }
     }
 
-    pub fn download_finished(&mut self, transcriber: &mut dyn Transcriber) {
-        if self.is_downloading() {
-            self.weight = Weight::Ready;
+    pub fn download_finished(&mut self, model: Model, transcriber: &mut dyn Transcriber) {
+        if !self.is_downloading(model) {
+            return;
+        }
+        self.download = Download::Idle;
+        if !self.is_on_disk(model) {
+            self.on_disk.push(model);
+        }
+        if self.model == Some(model) {
             self.start_next(transcriber);
         }
     }
 
     pub fn retry_download(&mut self, downloader: &mut dyn Downloader) {
-        if matches!(self.weight, Weight::Failed(_)) {
-            self.start_download(downloader);
+        if let Download::Failed { model, .. } = self.download {
+            self.start_download(model, downloader);
         }
     }
 
-    fn start_download(&mut self, downloader: &mut dyn Downloader) {
-        self.weight = Weight::Downloading {
+    fn start_download(&mut self, model: Model, downloader: &mut dyn Downloader) {
+        self.download = Download::Running {
+            model,
             received: 0,
             total: 0,
         };
-        downloader.start();
+        downloader.start(model);
     }
 
     /// The language can change only while the Recording is Queued.
@@ -454,6 +624,10 @@ impl Library {
         recording.segments = std::mem::take(&mut recording.live);
         recording.transcript_stored = true;
         recording.transcription_ms = Some(elapsed_ms);
+        recording.transcript_model = recording
+            .transcribing_model
+            .take()
+            .or(recording.transcript_model);
         self.end(path, Status::Completed, transcriber);
     }
 
@@ -522,13 +696,15 @@ impl Library {
 
     /// Closing Visper: the Transcribing Recording is Cancelled as by a user
     /// cancel, Queued ones stay Queued for the next launch, and nothing new
-    /// starts.
+    /// starts. The Transcriber is shut down so it frees its Model before the
+    /// process exits, whether or not a Transcription was running.
     pub fn quit(&mut self, transcriber: &mut dyn Transcriber) {
         self.quitting = true;
         if let Some(path) = self.transcribing_path() {
             transcriber.cancel();
             self.end_without_starting_next(&path, Status::Cancelled);
         }
+        transcriber.shutdown();
     }
 
     fn transcribing_path(&self) -> Option<PathBuf> {
@@ -544,8 +720,9 @@ impl Library {
             .find(|recording| recording.path == path && recording.status == Status::Transcribing)
     }
 
-    fn is_downloading(&self) -> bool {
-        matches!(self.weight, Weight::Downloading { .. })
+    /// Whether `model` is the one being fetched right now.
+    pub fn is_downloading(&self, model: Model) -> bool {
+        matches!(self.download, Download::Running { model: current, .. } if current == model)
     }
 
     /// Queues a finished Recording again, behind everything already Queued.
@@ -578,10 +755,13 @@ impl Library {
         RerunOutcome::Queued
     }
 
-    /// The single pump: once the weight is ready and nothing is
-    /// Transcribing, the earliest Queued Recording starts.
+    /// The single pump: once the current Model's weight is stored and
+    /// nothing is Transcribing, the earliest Queued Recording starts.
     fn start_next(&mut self, transcriber: &mut dyn Transcriber) {
-        if self.quitting || self.weight != Weight::Ready || self.transcribing_path().is_some() {
+        let Some(model) = self.model.filter(|model| self.is_on_disk(*model)) else {
+            return;
+        };
+        if self.quitting || self.transcribing_path().is_some() {
             return;
         }
         let Some(next) = self
@@ -593,7 +773,8 @@ impl Library {
         };
         next.status = Status::Transcribing;
         next.error = None;
-        transcriber.start(&next.path, next.language);
+        next.transcribing_model = Some(model);
+        transcriber.start(&next.path, next.language, model);
     }
 
     pub fn recordings(&self) -> &[Recording] {
@@ -652,6 +833,9 @@ impl Library {
         can_open: bool,
         transcriber: &mut dyn Transcriber,
     ) -> AddOutcome {
+        if !self.can_add() {
+            return AddOutcome::NoModelOnDisk;
+        }
         let name = file_name(&path);
         if !is_audio(&path) {
             return AddOutcome::Rejected(format!(
@@ -690,6 +874,8 @@ impl Library {
             missing: false,
             error: None,
             transcription_ms: None,
+            transcript_model: None,
+            transcribing_model: None,
             live: Vec::new(),
             progress: None,
         });
@@ -788,7 +974,7 @@ mod tests {
 
     #[test]
     fn adding_an_m4a_recording_queues_it_and_selects_it() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let recording = path("/Users/me/录音/周会.m4a");
 
         let outcome = library.add(recording.clone(), true, &mut FakeTranscriber::default());
@@ -807,7 +993,7 @@ mod tests {
 
     #[test]
     fn mp3_wav_flac_and_aac_are_queued() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         for name in ["a.mp3", "b.wav", "c.flac", "d.aac", "e.M4A"] {
             let outcome = library.add(
                 path(&format!("/Users/me/录音/{name}")),
@@ -821,7 +1007,7 @@ mod tests {
 
     #[test]
     fn a_video_file_is_refused_and_stays_out_of_the_library() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
 
         let outcome = library.add(
             path("/Users/me/影片/录像.mp4"),
@@ -840,7 +1026,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_audio_file_is_refused() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
 
         let outcome = library.add(
             path("/Users/me/录音/锁住.m4a"),
@@ -857,7 +1043,7 @@ mod tests {
 
     #[test]
     fn the_same_file_name_in_two_folders_are_two_recordings() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         library.add(
             path("/Users/me/录音/meeting.m4a"),
             true,
@@ -876,7 +1062,7 @@ mod tests {
 
     #[test]
     fn adding_a_queued_path_again_does_not_create_a_second_entry() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let recording = path("/Users/me/录音/周会.m4a");
         library.add(recording.clone(), true, &mut FakeTranscriber::default());
 
@@ -892,7 +1078,7 @@ mod tests {
 
     #[test]
     fn only_one_recording_is_selected() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let first = path("/Users/me/录音/一.m4a");
         let second = path("/Users/me/录音/二.mp3");
         library.add(first.clone(), true, &mut FakeTranscriber::default());
@@ -912,7 +1098,7 @@ mod tests {
 
     #[test]
     fn a_restored_library_keeps_recordings_and_the_selection() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let first = path("/Users/me/录音/一.wav");
         let second = path("/Users/me/录音/二.flac");
         library.add(first.clone(), true, &mut FakeTranscriber::default());
@@ -936,25 +1122,179 @@ mod tests {
     #[derive(Default)]
     struct FakeDownloader {
         starts: usize,
+        models: Vec<Model>,
+        abandoned: Vec<Model>,
     }
 
     impl Downloader for FakeDownloader {
-        fn start(&mut self) {
+        fn start(&mut self, model: Model) {
             self.starts += 1;
+            self.models.push(model);
         }
+
+        fn abandon(&mut self, model: Model) {
+            self.abandoned.push(model);
+        }
+    }
+
+    /// A fresh install whose user picked `model`, so that it downloads.
+    fn first_pick(
+        library: &mut Library,
+        model: Model,
+        downloader: &mut FakeDownloader,
+        transcriber: &mut FakeTranscriber,
+    ) {
+        library.prepare(&[], downloader, transcriber);
+        library.choose(model, downloader, transcriber);
+    }
+
+    /// A Library that takes Recordings but has chosen no Model, so nothing
+    /// ever starts.
+    fn accepting_library() -> Library {
+        let mut library = Library::new();
+        library.on_disk = vec![Model::LargeV3];
+        library
+    }
+
+    /// Turbo is on disk and Large v3 was chosen, so it downloads: the one way
+    /// to add Recordings that then wait for the weight.
+    fn downloading_large_v3_beside_turbo(
+        library: &mut Library,
+        downloader: &mut FakeDownloader,
+        transcriber: &mut FakeTranscriber,
+    ) {
+        library.prepare(&[Model::LargeV3Turbo], downloader, transcriber);
+        library.choose(Model::LargeV3, downloader, transcriber);
+    }
+
+    #[test]
+    fn adding_with_no_model_on_disk_is_refused_and_queues_nothing() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        let before = library.clone();
+
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(!library.can_add());
+        assert_eq!(outcome, AddOutcome::NoModelOnDisk);
+        assert_eq!(library, before);
+        assert!(library.is_empty());
+
+        // The first download running is still no Model on disk.
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut transcriber,
+        );
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(!library.can_add());
+        assert_eq!(outcome, AddOutcome::NoModelOnDisk);
+        assert!(library.is_empty());
+        assert!(transcriber.started.is_empty());
+    }
+
+    #[test]
+    fn adding_works_while_one_model_is_on_disk_and_the_other_downloads() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        library.prepare(&[Model::LargeV3], &mut downloader, &mut transcriber);
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        assert!(matches!(library.download(), Download::Running { .. }));
+
+        let outcome = library.add(path("/Users/me/录音/周会.m4a"), true, &mut transcriber);
+
+        assert!(library.can_add());
+        assert_eq!(outcome, AddOutcome::Queued);
+        assert_eq!(library.recordings().len(), 1);
+        assert_eq!(library.recordings()[0].status, Status::Queued);
+    }
+
+    #[test]
+    fn a_new_library_has_no_model_and_downloads_nothing_at_startup() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+
+        library.prepare(&[], &mut downloader, &mut FakeTranscriber::default());
+
+        assert_eq!(library.model(), None);
+        assert!(!library.is_ready());
+        assert_eq!(downloader.starts, 0);
+        assert_eq!(library.download(), &Download::Idle);
+    }
+
+    #[test]
+    fn a_library_from_before_the_choice_without_the_weight_still_has_no_model() {
+        let mut library = Library::from_json(r#"{"recordings":[],"selected":null}"#).expect("old");
+        let mut downloader = FakeDownloader::default();
+
+        library.prepare(&[], &mut downloader, &mut FakeTranscriber::default());
+
+        assert_eq!(library.model(), None);
+        assert_eq!(downloader.starts, 0);
+    }
+
+    #[test]
+    fn the_first_pick_makes_that_model_current_and_downloads_it() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        library.prepare(&[], &mut downloader, &mut transcriber);
+
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+
+        assert_eq!(library.model(), Some(Model::LargeV3Turbo));
+        assert_eq!(downloader.models, vec![Model::LargeV3Turbo]);
+        assert!(matches!(
+            library.download(),
+            Download::Running {
+                model: Model::LargeV3Turbo,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_chosen_model_whose_weight_is_missing_downloads_again_without_a_new_choice() {
+        let mut library = Library::new();
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            &mut FakeTranscriber::default(),
+        );
+        let mut restored =
+            Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
+        let mut downloader = FakeDownloader::default();
+
+        restored.prepare(
+            &[Model::LargeV3],
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+
+        assert_eq!(restored.model(), Some(Model::LargeV3Turbo));
+        assert_eq!(downloader.starts, 1);
+        assert_eq!(downloader.models, vec![Model::LargeV3Turbo]);
     }
 
     #[test]
     fn a_missing_weight_starts_downloading_without_asking() {
-        let mut library = Library::new();
+        let mut library =
+            Library::from_json(r#"{"recordings":[],"selected":null,"model":"LargeV3"}"#)
+                .expect("chosen");
         let mut downloader = FakeDownloader::default();
 
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare(&[], &mut downloader, &mut FakeTranscriber::default());
 
         assert_eq!(downloader.starts, 1);
+        assert_eq!(downloader.models, vec![Model::LargeV3]);
         assert_eq!(
-            library.weight(),
-            &Weight::Downloading {
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3,
                 received: 0,
                 total: 0
             }
@@ -962,27 +1302,366 @@ mod tests {
     }
 
     #[test]
+    fn large_v3_is_named_and_sized_for_its_weight() {
+        assert_eq!(Model::LargeV3.full_name(), "Large v3");
+        assert_eq!(Model::LargeV3.short_name(), "Large");
+        assert_eq!(Model::LargeV3.weight_file(), "ggml-large-v3.bin");
+        assert_eq!(Model::LargeV3.bytes(), 3_095_033_483);
+    }
+
+    #[test]
+    fn large_v3_turbo_is_named_and_sized_for_its_weight() {
+        assert_eq!(Model::LargeV3Turbo.full_name(), "Large v3 Turbo");
+        assert_eq!(Model::LargeV3Turbo.short_name(), "Turbo");
+        assert_eq!(Model::LargeV3Turbo.weight_file(), "ggml-large-v3-turbo.bin");
+        assert_eq!(Model::LargeV3Turbo.bytes(), 1_624_555_275);
+        assert_eq!(Model::ALL, [Model::LargeV3, Model::LargeV3Turbo]);
+    }
+
+    #[test]
+    fn a_library_from_before_the_choice_comes_up_as_large_v3() {
+        let mut library = Library::from_json(r#"{"recordings":[],"selected":null}"#).expect("old");
+        let mut downloader = FakeDownloader::default();
+
+        library.prepare(
+            &[Model::LargeV3],
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+
+        assert_eq!(library.model(), Some(Model::LargeV3));
+        assert!(library.is_ready());
+        assert_eq!(downloader.starts, 0);
+    }
+
+    #[test]
+    fn the_current_model_is_saved_and_restored() {
+        let mut library = Library::new();
+        library.prepare(
+            &[Model::LargeV3, Model::LargeV3Turbo],
+            &mut FakeDownloader::default(),
+            &mut FakeTranscriber::default(),
+        );
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            &mut FakeTranscriber::default(),
+        );
+
+        let restored = Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
+
+        assert_eq!(restored.model(), Some(Model::LargeV3Turbo));
+    }
+
+    /// Both weights on disk, Large v3 current, as after switching once.
+    fn library_with_both_weights() -> (Library, FakeTranscriber) {
+        let mut library = Library::new();
+        let mut transcriber = FakeTranscriber::default();
+        library.prepare(
+            &[Model::LargeV3, Model::LargeV3Turbo],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
+        (library, transcriber)
+    }
+
+    #[test]
+    fn choosing_a_model_that_is_not_on_disk_downloads_it_and_queued_recordings_wait() {
+        let (mut library, mut transcriber) = ready_library();
+        let mut downloader = FakeDownloader::default();
+        let waiting = path("/Users/me/录音/三.m4a");
+
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        library.add(waiting.clone(), true, &mut transcriber);
+
+        assert_eq!(library.model(), Some(Model::LargeV3Turbo));
+        assert_eq!(downloader.models, vec![Model::LargeV3Turbo]);
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+        assert!(!library.is_ready());
+        assert_eq!(library.recording(&waiting).unwrap().status, Status::Queued);
+        assert!(transcriber.started.is_empty());
+
+        library.download_finished(Model::LargeV3Turbo, &mut transcriber);
+
+        assert!(library.is_ready());
+        assert_eq!(library.download(), &Download::Idle);
+        assert_eq!(
+            library.recording(&waiting).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models.last(), Some(&Model::LargeV3Turbo));
+        assert_eq!(downloader.starts, 1);
+    }
+
+    #[test]
+    fn switching_during_a_transcription_lets_it_finish_and_the_next_one_uses_the_new_model() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let first = path("/Users/me/录音/一.m4a");
+        let second = path("/Users/me/录音/二.m4a");
+        library.add(first.clone(), true, &mut transcriber);
+        library.add(second.clone(), true, &mut transcriber);
+
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
+
+        assert_eq!(transcriber.cancels, 0);
+        assert_eq!(
+            library.recording(&first).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
+
+        library.transcription_finished(&first, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&second).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(
+            transcriber.models,
+            vec![Model::LargeV3, Model::LargeV3Turbo]
+        );
+    }
+
+    #[test]
+    fn choosing_the_current_model_again_does_nothing() {
+        let (mut library, mut transcriber) = ready_library();
+        let mut downloader = FakeDownloader::default();
+        let before = library.clone();
+
+        library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
+
+        assert_eq!(library, before);
+        assert_eq!(downloader.starts, 0);
+        assert!(transcriber.started.is_empty());
+    }
+
+    #[test]
+    fn choosing_a_model_on_disk_needs_no_download_and_the_next_recording_uses_it() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let mut downloader = FakeDownloader::default();
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        let waiting = path("/Users/me/录音/一.m4a");
+
+        library.add(waiting.clone(), true, &mut transcriber);
+
+        assert_eq!(transcriber.models, vec![Model::LargeV3Turbo]);
+        assert_eq!(downloader.starts, 0);
+
+        library.transcription_finished(&waiting, 1_000, &mut transcriber);
+        let next = path("/Users/me/录音/二.m4a");
+        library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
+        library.add(next, true, &mut transcriber);
+
+        assert_eq!(
+            transcriber.models,
+            vec![Model::LargeV3Turbo, Model::LargeV3]
+        );
+    }
+
+    #[test]
+    fn re_transcribing_starts_with_the_current_model() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
+
+        library.rerun(&recording, true, &mut transcriber);
+
+        assert_eq!(
+            transcriber.models,
+            vec![Model::LargeV3, Model::LargeV3Turbo]
+        );
+    }
+
+    #[test]
+    fn choosing_a_second_missing_model_mid_download_abandons_the_first_and_downloads_the_new_one() {
+        let mut library = Library::new();
+        let mut downloader = FakeDownloader::default();
+        let mut transcriber = FakeTranscriber::default();
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut transcriber,
+        );
+        library.download_progressed(Model::LargeV3, 900, 3_000);
+
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+
+        assert_eq!(downloader.abandoned, vec![Model::LargeV3]);
+        assert_eq!(downloader.models, vec![Model::LargeV3, Model::LargeV3Turbo]);
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+
+        library.download_finished(Model::LargeV3, &mut transcriber);
+
+        assert!(!library.is_on_disk(Model::LargeV3));
+        assert!(!library.is_ready());
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+    }
+
+    /// Large v3 on disk and one Queued Recording waiting for a Turbo download
+    /// that has started.
+    fn waiting_for_turbo() -> (Library, FakeDownloader, FakeTranscriber, PathBuf) {
+        let (mut library, mut transcriber) = ready_library();
+        let mut downloader = FakeDownloader::default();
+        let waiting = path("/Users/me/录音/三.m4a");
+        library.choose(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+        library.add(waiting.clone(), true, &mut transcriber);
+        library.download_progressed(Model::LargeV3Turbo, 640, 1_600);
+        (library, downloader, transcriber, waiting)
+    }
+
+    #[test]
+    fn switching_back_to_a_model_on_disk_mid_download_abandons_it_and_the_queue_runs() {
+        let (mut library, mut downloader, mut transcriber, waiting) = waiting_for_turbo();
+        assert_eq!(library.recording(&waiting).unwrap().status, Status::Queued);
+
+        library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
+
+        assert_eq!(downloader.abandoned, vec![Model::LargeV3Turbo]);
+        assert_eq!(library.download(), &Download::Idle);
+        assert_eq!(library.model(), Some(Model::LargeV3));
+        assert_eq!(
+            library.recording(&waiting).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
+    }
+
+    #[test]
+    fn late_events_from_an_abandoned_download_change_nothing() {
+        let (mut library, mut downloader, mut transcriber, _) = waiting_for_turbo();
+        library.choose(Model::LargeV3, &mut downloader, &mut transcriber);
+        let before = library.clone();
+        let started = transcriber.models.len();
+
+        library.download_progressed(Model::LargeV3Turbo, 900, 1_600);
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+        library.download_finished(Model::LargeV3Turbo, &mut transcriber);
+
+        assert_eq!(library, before);
+        assert!(!library.is_on_disk(Model::LargeV3Turbo));
+        assert_eq!(transcriber.models.len(), started);
+    }
+
+    #[test]
+    fn retry_after_a_failed_switch_downloads_the_same_model_again() {
+        let (mut library, mut downloader, _, _) = waiting_for_turbo();
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+
+        library.retry_download(&mut downloader);
+
+        assert_eq!(
+            downloader.models,
+            vec![Model::LargeV3Turbo, Model::LargeV3Turbo]
+        );
+        assert_eq!(
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3Turbo,
+                received: 0,
+                total: 0
+            }
+        );
+        assert_eq!(library.model(), Some(Model::LargeV3Turbo));
+    }
+
+    #[test]
+    fn switching_back_after_a_failed_download_makes_the_model_current_and_the_queue_runs() {
+        let (mut library, mut downloader, mut transcriber, waiting) = waiting_for_turbo();
+        library.download_failed(Model::LargeV3Turbo, "网络中断".into());
+
+        let allowed = library.switch_back(Model::LargeV3, &mut downloader, &mut transcriber);
+
+        assert!(allowed);
+        assert_eq!(library.model(), Some(Model::LargeV3));
+        assert_eq!(library.download(), &Download::Idle);
+        assert_eq!(
+            library.recording(&waiting).unwrap().status,
+            Status::Transcribing
+        );
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
+        assert!(downloader.abandoned.is_empty());
+    }
+
+    #[test]
+    fn switching_back_is_only_allowed_to_a_model_on_disk() {
+        let (mut library, mut downloader, mut transcriber) = {
+            let (library, transcriber) = ready_library();
+            (library, FakeDownloader::default(), transcriber)
+        };
+        let before = library.clone();
+
+        let allowed = library.switch_back(Model::LargeV3Turbo, &mut downloader, &mut transcriber);
+
+        assert!(!allowed);
+        assert_eq!(library, before);
+        assert_eq!(downloader.starts, 0);
+    }
+
+    #[test]
     fn a_stored_weight_is_ready_without_downloading_again() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
 
-        library.prepare_weight(true, &mut downloader, &mut FakeTranscriber::default());
+        library.prepare(
+            &[Model::LargeV3],
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
 
         assert_eq!(downloader.starts, 0);
-        assert_eq!(library.weight(), &Weight::Ready);
+        assert!(library.is_ready());
+        assert_eq!(library.model(), Some(Model::LargeV3));
     }
 
     #[test]
     fn download_progress_shows_how_much_of_the_weight_has_arrived() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
 
-        library.download_progressed(1_800_000_000, 3_095_033_483);
+        library.download_progressed(Model::LargeV3, 1_800_000_000, 3_095_033_483);
 
         assert_eq!(
-            library.weight(),
-            &Weight::Downloading {
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3,
                 received: 1_800_000_000,
                 total: 3_095_033_483
             }
@@ -993,13 +1672,24 @@ mod tests {
     fn a_failed_download_stays_failed_and_does_not_retry_by_itself() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(500, 3_000);
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 500, 3_000);
 
-        library.download_failed("网络中断".into());
-        library.download_progressed(900, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
+        library.download_progressed(Model::LargeV3, 900, 3_000);
 
-        assert_eq!(library.weight(), &Weight::Failed("网络中断".into()));
+        assert_eq!(
+            library.download(),
+            &Download::Failed {
+                model: Model::LargeV3,
+                error: "网络中断".into()
+            }
+        );
         assert_eq!(downloader.starts, 1);
     }
 
@@ -1007,16 +1697,23 @@ mod tests {
     fn retry_starts_the_download_again_from_nothing() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(500, 3_000);
-        library.download_failed("网络中断".into());
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 500, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
 
         library.retry_download(&mut downloader);
 
         assert_eq!(downloader.starts, 2);
+        assert_eq!(downloader.models, vec![Model::LargeV3, Model::LargeV3]);
         assert_eq!(
-            library.weight(),
-            &Weight::Downloading {
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3,
                 received: 0,
                 total: 0
             }
@@ -1027,26 +1724,36 @@ mod tests {
     fn a_finished_download_makes_the_weight_ready() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(3_000, 3_000);
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 3_000, 3_000);
 
-        library.download_finished(&mut FakeTranscriber::default());
+        library.download_finished(Model::LargeV3, &mut FakeTranscriber::default());
 
-        assert_eq!(library.weight(), &Weight::Ready);
+        assert!(library.is_ready());
+        assert_eq!(library.model(), Some(Model::LargeV3));
     }
 
     #[test]
     fn recordings_added_while_the_weight_downloads_or_failed_stay_queued() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
+        downloading_large_v3_beside_turbo(
+            &mut library,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
         library.add(
             path("/Users/me/录音/一.m4a"),
             true,
             &mut FakeTranscriber::default(),
         );
-        library.download_progressed(1_000, 3_000);
-        library.download_failed("网络中断".into());
+        library.download_progressed(Model::LargeV3, 1_000, 3_000);
+        library.download_failed(Model::LargeV3, "网络中断".into());
         library.add(
             path("/Users/me/录音/二.m4a"),
             true,
@@ -1065,15 +1772,21 @@ mod tests {
     fn retry_does_nothing_while_the_download_is_running() {
         let mut library = Library::new();
         let mut downloader = FakeDownloader::default();
-        library.prepare_weight(false, &mut downloader, &mut FakeTranscriber::default());
-        library.download_progressed(1_000, 3_000);
+        first_pick(
+            &mut library,
+            Model::LargeV3,
+            &mut downloader,
+            &mut FakeTranscriber::default(),
+        );
+        library.download_progressed(Model::LargeV3, 1_000, 3_000);
 
         library.retry_download(&mut downloader);
 
         assert_eq!(downloader.starts, 1);
         assert_eq!(
-            library.weight(),
-            &Weight::Downloading {
+            library.download(),
+            &Download::Running {
+                model: Model::LargeV3,
                 received: 1_000,
                 total: 3_000
             }
@@ -1083,23 +1796,34 @@ mod tests {
     #[derive(Default)]
     struct FakeTranscriber {
         started: Vec<(PathBuf, Language)>,
+        models: Vec<Model>,
         cancels: usize,
+        shutdowns: usize,
     }
 
     impl Transcriber for FakeTranscriber {
-        fn start(&mut self, path: &Path, language: Language) {
+        fn start(&mut self, path: &Path, language: Language, model: Model) {
             self.started.push((path.to_path_buf(), language));
+            self.models.push(model);
         }
 
         fn cancel(&mut self) {
             self.cancels += 1;
+        }
+
+        fn shutdown(&mut self) {
+            self.shutdowns += 1;
         }
     }
 
     fn ready_library() -> (Library, FakeTranscriber) {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         (library, transcriber)
     }
 
@@ -1113,6 +1837,7 @@ mod tests {
         assert_eq!(library.recordings()[0].status, Status::Transcribing);
         assert_eq!(library.recordings()[0].status.label(), "转写中");
         assert_eq!(transcriber.started, vec![(recording, Language::Auto)]);
+        assert_eq!(transcriber.models, vec![Model::LargeV3]);
     }
 
     #[test]
@@ -1199,13 +1924,17 @@ mod tests {
     fn the_earliest_recording_queued_during_the_download_starts_when_it_finishes() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        downloading_large_v3_beside_turbo(
+            &mut library,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let first = path("/Users/me/录音/一.m4a");
         library.add(first.clone(), true, &mut transcriber);
         library.add(path("/Users/me/录音/二.m4a"), true, &mut transcriber);
         assert!(transcriber.started.is_empty());
 
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
 
         assert_eq!(
             statuses(&library),
@@ -1216,7 +1945,7 @@ mod tests {
 
     #[test]
     fn a_restored_queue_starts_once_the_stored_weight_is_found() {
-        let mut queued = Library::new();
+        let mut queued = accepting_library();
         let first = path("/Users/me/录音/一.m4a");
         queued.add(first.clone(), true, &mut FakeTranscriber::default());
         queued.add(
@@ -1228,7 +1957,11 @@ mod tests {
             Library::from_json(&queued.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(transcriber.started, vec![(first, Language::Auto)]);
     }
@@ -1357,7 +2090,11 @@ mod tests {
             Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        restored.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        restored.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(
             statuses(&restored),
@@ -1370,12 +2107,16 @@ mod tests {
     fn a_language_chosen_before_the_start_is_the_one_the_transcription_uses() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        downloading_large_v3_beside_turbo(
+            &mut library,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let recording = path("/Users/me/录音/路演彩排.flac");
         library.add(recording.clone(), true, &mut transcriber);
 
         library.set_language(&recording, Language::Chinese);
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
 
         assert_eq!(library.recordings()[0].language, Language::Chinese);
         assert_eq!(transcriber.started, vec![(recording, Language::Chinese)]);
@@ -1444,7 +2185,11 @@ mod tests {
         );
         let mut library = Library::from_json(&snapshot).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         (library, transcriber)
     }
 
@@ -1640,7 +2385,7 @@ mod tests {
 
     #[test]
     fn a_queued_recording_without_a_transcript_cannot_play() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         library.add(
             path("/Users/me/录音/周会.m4a"),
             true,
@@ -1900,7 +2645,7 @@ mod tests {
 
     #[test]
     fn a_missing_queued_recording_waits_and_starts_once_its_file_opens_again() {
-        let mut library = Library::new();
+        let mut library = accepting_library();
         let mut transcriber = FakeTranscriber::default();
         let moved = path("/Users/me/录音/移走了.m4a");
         let present = path("/Users/me/录音/还在.m4a");
@@ -1908,7 +2653,11 @@ mod tests {
         library.add(present.clone(), true, &mut transcriber);
         library.file_checked(&moved, false, &mut transcriber);
 
-        library.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        library.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         assert_eq!(library.recordings()[0].status, Status::Queued);
         assert_eq!(transcriber.started, vec![(present.clone(), Language::Auto)]);
         library.transcription_finished(&present, 60_000, &mut transcriber);
@@ -1964,12 +2713,32 @@ mod tests {
     }
 
     #[test]
+    fn quit_shuts_the_transcriber_down_even_when_nothing_is_transcribing() {
+        let (mut library, mut transcriber) = ready_library();
+
+        library.quit(&mut transcriber);
+
+        assert_eq!(transcriber.cancels, 0);
+        assert_eq!(transcriber.shutdowns, 1);
+    }
+
+    #[test]
+    fn quit_cancels_before_shutting_down() {
+        let (mut library, mut transcriber) = ready_library();
+        library.add(path("/Users/me/录音/一.m4a"), true, &mut transcriber);
+
+        library.quit(&mut transcriber);
+
+        assert_eq!((transcriber.cancels, transcriber.shutdowns), (1, 1));
+    }
+
+    #[test]
     fn after_quit_the_queue_starts_again_on_the_next_launch_in_add_order() {
         let (mut library, mut transcriber) = ready_library();
         let running = path("/Users/me/录音/一.m4a");
         let second = path("/Users/me/录音/二.m4a");
-        let third = path("/Users/me/录音/三.m4a");
-        for recording in [&running, &second, &third] {
+        let waiting = path("/Users/me/录音/三.m4a");
+        for recording in [&running, &second, &waiting] {
             library.add(recording.clone(), true, &mut transcriber);
         }
         library.quit(&mut transcriber);
@@ -1977,7 +2746,11 @@ mod tests {
             Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
         let mut transcriber = FakeTranscriber::default();
 
-        next_launch.prepare_weight(true, &mut FakeDownloader::default(), &mut transcriber);
+        next_launch.prepare(
+            &[Model::LargeV3],
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
 
         assert_eq!(
             statuses(&next_launch),
@@ -2002,17 +2775,182 @@ mod tests {
     fn nothing_starts_after_quit_even_when_late_events_arrive() {
         let mut library = Library::new();
         let mut transcriber = FakeTranscriber::default();
-        library.prepare_weight(false, &mut FakeDownloader::default(), &mut transcriber);
+        downloading_large_v3_beside_turbo(
+            &mut library,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
         let moved = path("/Users/me/录音/移走了.m4a");
         library.add(moved.clone(), true, &mut transcriber);
         library.add(path("/Users/me/录音/二.m4a"), true, &mut transcriber);
         library.file_checked(&moved, false, &mut transcriber);
 
         library.quit(&mut transcriber);
-        library.download_finished(&mut transcriber);
+        library.download_finished(Model::LargeV3, &mut transcriber);
         library.file_checked(&moved, true, &mut transcriber);
 
         assert!(transcriber.started.is_empty());
         assert_eq!(statuses(&library), vec![Status::Queued, Status::Queued]);
+    }
+
+    fn choose_turbo(library: &mut Library, transcriber: &mut FakeTranscriber) {
+        library.choose(
+            Model::LargeV3Turbo,
+            &mut FakeDownloader::default(),
+            transcriber,
+        );
+    }
+
+    #[test]
+    fn a_transcription_that_succeeds_with_turbo_records_turbo() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        choose_turbo(&mut library, &mut transcriber);
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            None
+        );
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn the_model_recorded_is_the_one_the_transcription_started_with() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        choose_turbo(&mut library, &mut transcriber);
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3)
+        );
+    }
+
+    #[test]
+    fn a_failure_or_cancel_after_a_turbo_completion_keeps_the_earlier_model() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let failing = path("/Users/me/录音/一.m4a");
+        let cancelled = path("/Users/me/录音/二.m4a");
+        choose_turbo(&mut library, &mut transcriber);
+        library.add(failing.clone(), true, &mut transcriber);
+        library.transcription_finished(&failing, 1_000, &mut transcriber);
+        library.add(cancelled.clone(), true, &mut transcriber);
+        library.transcription_finished(&cancelled, 1_000, &mut transcriber);
+        library.choose(
+            Model::LargeV3,
+            &mut FakeDownloader::default(),
+            &mut transcriber,
+        );
+
+        library.rerun(&failing, true, &mut transcriber);
+        library.transcription_failed(&failing, "坏了".into(), &mut transcriber);
+        library.rerun(&cancelled, true, &mut transcriber);
+        library.cancel(&cancelled, &mut transcriber);
+
+        for path in [&failing, &cancelled] {
+            let recording = library.recording(path).unwrap();
+            assert_ne!(recording.status, Status::Completed);
+            assert_eq!(recording.transcript_model(), Some(Model::LargeV3Turbo));
+        }
+    }
+
+    #[test]
+    fn a_failure_without_an_earlier_transcript_records_no_model() {
+        let (mut library, mut transcriber) = ready_library();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+
+        library.transcription_failed(&recording, "坏了".into(), &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            None
+        );
+    }
+
+    #[test]
+    fn re_transcribing_a_large_v3_transcript_while_turbo_is_current_records_turbo() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+        choose_turbo(&mut library, &mut transcriber);
+
+        library.rerun(&recording, true, &mut transcriber);
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3)
+        );
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        assert_eq!(
+            library.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn the_transcript_model_survives_a_restart() {
+        let (mut library, mut transcriber) = library_with_both_weights();
+        let recording = path("/Users/me/录音/一.m4a");
+        choose_turbo(&mut library, &mut transcriber);
+        library.add(recording.clone(), true, &mut transcriber);
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+
+        let restored = Library::from_json(&library.to_json().expect("snapshot")).expect("snapshot");
+
+        assert_eq!(
+            restored.recording(&recording).unwrap().transcript_model(),
+            Some(Model::LargeV3Turbo)
+        );
+    }
+
+    #[test]
+    fn a_stored_transcript_without_a_recorded_model_reads_as_large_v3() {
+        let json = r#"{"recordings":[
+            {"path":"/a/完成.m4a","status":"Completed","segments":[{"start_ms":0,"end_ms":1,"text":"好"}]},
+            {"path":"/a/失败.m4a","status":"Failed","transcript_stored":true},
+            {"path":"/a/没有.m4a","status":"Failed"},
+            {"path":"/a/等待.m4a","status":"Queued"}
+        ],"selected":null}"#;
+
+        let library = Library::from_json(json).expect("old snapshot");
+
+        let models: Vec<_> = library
+            .recordings()
+            .iter()
+            .map(Recording::transcript_model)
+            .collect();
+        assert_eq!(
+            models,
+            vec![Some(Model::LargeV3), Some(Model::LargeV3), None, None]
+        );
+    }
+
+    #[test]
+    fn the_model_is_shown_only_for_a_finished_recording_with_a_stored_transcript() {
+        let (mut library, mut transcriber) = ready_library();
+        let recording = path("/Users/me/录音/一.m4a");
+        library.add(recording.clone(), true, &mut transcriber);
+        let shown = |library: &Library| library.recording(&recording).unwrap().shown_model();
+        assert_eq!(shown(&library), None);
+
+        library.transcription_finished(&recording, 1_000, &mut transcriber);
+        assert_eq!(shown(&library), Some(Model::LargeV3));
+
+        library.rerun(&recording, true, &mut transcriber);
+        assert_eq!(shown(&library), None);
+
+        library.cancel(&recording, &mut transcriber);
+        assert_eq!(shown(&library), Some(Model::LargeV3));
     }
 }

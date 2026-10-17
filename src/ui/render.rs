@@ -1,4 +1,5 @@
 use super::motion::Motion;
+use super::scrollbar::Scrollbar;
 use super::{PlaybackState, Store, VisperWindow};
 use crate::theme::{Palette, metrics as m, mix, tint};
 use gpui::prelude::*;
@@ -240,7 +241,7 @@ impl Ui {
 
 fn button(
     id: &str,
-    text: &'static str,
+    text: impl Into<SharedString>,
     glyph: Option<&str>,
     emphasis: Emphasis,
     enabled: bool,
@@ -278,7 +279,7 @@ fn button(
     if let Some(glyph) = glyph {
         control = control.child(icon(glyph, foreground, 16.0));
     }
-    control = control.child(text).text_color(rgb(foreground));
+    control = control.child(text.into()).text_color(rgb(foreground));
     if !enabled {
         return control.border_color(rgb(palette.line));
     }
@@ -375,6 +376,17 @@ fn lift(alpha: f32) -> Vec<gpui::BoxShadow> {
     }]
 }
 
+/// The shadow of a self-drawn popover (visual spec §6), which comes from the
+/// theme so that dark appearance gets its heavier one.
+fn popover_shadow(palette: Palette) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: gpui::hsla(0.0, 0.0, 0.0, palette.popover_shadow),
+        offset: point(px(0.0), px(8.0)),
+        blur_radius: px(24.0),
+        spread_radius: px(0.0),
+    }]
+}
+
 fn progress_bar(fraction: f32, palette: Palette) -> Div {
     div()
         .h(px(4.0))
@@ -462,6 +474,7 @@ impl Render for VisperWindow {
         let timing = self.timing();
         let layout = Layout::for_window(window);
         let library = self.library.clone();
+        let model_open = self.model_open;
         let playback = library
             .selected()
             .and_then(|recording| self.player.state(&recording.path));
@@ -476,7 +489,16 @@ impl Render for VisperWindow {
             selection: self.selection.clone(),
             focus: self.selection_focus.clone(),
             scroll: self.transcript_scroll.clone(),
+            bar: self.transcript_bar.clone(),
         };
+        let library_view = LibraryView {
+            model_open,
+            scroll: self.library_scroll.clone(),
+            bar: self.library_bar.clone(),
+        };
+        let strip = download_strip(&library, &ui, layout, cx);
+        let notice = self.notice.clone().map(|text| notice_bar(text, &ui, cx));
+        let below_bar = strip.is_some() || notice.is_some();
         div()
             .size_full()
             .flex()
@@ -487,6 +509,11 @@ impl Render for VisperWindow {
             .line_height(px(m::LABEL_LINE))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let stroke = &event.keystroke;
+                if stroke.key == "escape" && this.model_open {
+                    this.model_open = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
                 if stroke.key == "tab" {
                     this.motion.use_keyboard(true);
                     if stroke.modifiers.shift {
@@ -508,7 +535,15 @@ impl Render for VisperWindow {
                     this.admit(path.clone(), cx);
                 }
             }))
-            .child(sidebar(&library, &ui, layout, timing.as_ref(), cx))
+            .child(sidebar(
+                &library,
+                window,
+                &library_view,
+                &ui,
+                layout,
+                timing.as_ref(),
+                cx,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -517,13 +552,23 @@ impl Render for VisperWindow {
                     .flex()
                     .flex_col()
                     .bg(rgb(palette.main))
-                    .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                        style.bg(rgb(palette.playing))
+                    .when(library.can_add(), |column| {
+                        column.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                            style.bg(rgb(palette.playing))
+                        })
                     })
                     .child(pane_header(library.selected(), &view, &ui, layout, cx))
-                    .children(download_strip(library.weight(), &ui, layout, cx))
-                    .children(self.notice.clone().map(|text| notice_bar(text, &ui, cx)))
-                    .child(detail(&library, &view, &ui, layout, timing.as_ref(), cx)),
+                    .children(strip)
+                    .children(notice)
+                    .child(detail(
+                        &library,
+                        &view,
+                        &ui,
+                        layout,
+                        below_bar,
+                        timing.as_ref(),
+                        cx,
+                    )),
             )
     }
 }
@@ -560,7 +605,7 @@ fn pane_header(
 }
 
 fn download_strip(
-    weight: &visper::Weight,
+    library: &visper::Library,
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
@@ -576,8 +621,12 @@ fn download_strip(
         .items_center()
         .border_b_1()
         .border_color(rgb(palette.line));
-    match weight {
-        visper::Weight::Downloading { received, total } => {
+    match library.download() {
+        visper::Download::Running {
+            model,
+            received,
+            total,
+        } => {
             let fraction = if *total > 0 {
                 *received as f32 / *total as f32
             } else {
@@ -598,7 +647,10 @@ fn download_strip(
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .child(label("正在准备转写模型").font_weight(FontWeight::MEDIUM))
+                .child(
+                    label(format!("正在准备 {}", model.full_name()))
+                        .font_weight(FontWeight::MEDIUM),
+                )
                 .child(small("首次使用需下载一次，之后可离线转写", palette));
             let progress = div()
                 .flex_1()
@@ -629,37 +681,55 @@ fn download_strip(
                     .child(small(amount, palette).flex_none().font_family(m::MONO_FONT)),
             )
         }
-        visper::Weight::Failed(error) => Some(
-            strip
-                .child(icon("warning", palette.danger, 20.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            label("模型下载失败")
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.danger)),
-                        )
-                        .child(small(error.clone(), palette)),
-                )
-                .child(
-                    button(
-                        "retry-download",
-                        "重试",
-                        Some("retry"),
-                        Emphasis::Secondary,
-                        true,
-                        ui,
-                        cx,
+        visper::Download::Failed { model, error } => {
+            // Only a Model that is on disk can be switched back to.
+            let other = visper::Model::ALL
+                .into_iter()
+                .find(|other| other != model && library.is_on_disk(*other));
+            Some(
+                strip
+                    .child(icon("warning", palette.danger, 20.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                label(format!("{} 下载失败", model.full_name()))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(palette.danger)),
+                            )
+                            .child(small(error.clone(), palette)),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_download(cx))),
-                ),
-        ),
-        visper::Weight::Absent | visper::Weight::Ready => None,
+                    .child(
+                        button(
+                            "retry-download",
+                            "重试",
+                            Some("retry"),
+                            Emphasis::Secondary,
+                            true,
+                            ui,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.retry_download(cx))),
+                    )
+                    .children(other.map(|other| {
+                        button(
+                            "switch-back",
+                            format!("切回 {}", other.full_name()),
+                            None,
+                            Emphasis::Secondary,
+                            true,
+                            ui,
+                            cx,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.switch_back(other, cx)))
+                    })),
+            )
+        }
+        visper::Download::Idle => None,
     }
 }
 
@@ -705,8 +775,8 @@ fn status(recording: &visper::Recording, palette: Palette) -> Div {
     div()
         .flex()
         .items_center()
-        .gap(px(6.0))
-        .child(icon(glyph, color, 14.0))
+        .gap(px(STATUS_GAP))
+        .child(icon(glyph, color, STATUS_ICON))
         .child(small(recording.status.label(), palette))
 }
 
@@ -730,13 +800,22 @@ impl Render for Tooltip {
 }
 
 /// The sidebar's way to add a Recording: a row, not a button, since it sits
-/// among the Library's own rows.
-fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
+/// among the Library's own rows. Disabled until a Model is on disk.
+fn add_recording(enabled: bool, ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
     let palette = ui.palette;
     let id = SharedString::from("add-recording");
-    let level = ui.motion.hover(&id);
+    let level = if enabled { ui.motion.hover(&id) } else { 0.0 };
+    let (circle, foreground) = if enabled {
+        (
+            mix(palette.accent, palette.accent_hover, level),
+            palette.on_accent,
+        )
+    } else {
+        (palette.line, palette.disabled)
+    };
     let row = div()
         .id(id.clone())
+        .debug_selector(|| "add-recording".into())
         .w_full()
         .h(px(36.0))
         .px(px(10.0))
@@ -747,8 +826,6 @@ fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
         .text_size(px(m::LABEL_SIZE))
         .line_height(px(m::LABEL_LINE))
         .font_weight(FontWeight::MEDIUM)
-        .bg(tint(palette.ink, 0.05 * level))
-        .active(move |style| style.bg(tint(palette.ink, 0.09)))
         .child(
             div()
                 .size(px(22.0))
@@ -757,16 +834,61 @@ fn add_recording(ui: &Ui, cx: &mut Context<VisperWindow>) -> Stateful<Div> {
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(rgb(mix(palette.accent, palette.accent_hover, level)))
-                .child(icon("plus-bold", palette.on_accent, 12.0)),
+                .bg(rgb(circle))
+                .child(icon("plus-bold", foreground, 12.0)),
         )
         .child("加入录音");
+    if !enabled {
+        return row.text_color(rgb(foreground)).tooltip(move |_, cx| {
+            cx.new(|_| Tooltip {
+                text: "模型下载完成后可以加入录音".into(),
+                palette,
+            })
+            .into()
+        });
+    }
     ui.interactive(row, &id, m::ROW_RADIUS, Ring::Inside, cx)
+        .bg(tint(palette.ink, 0.05 * level))
+        .active(move |style| style.bg(tint(palette.ink, 0.09)))
         .on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)))
 }
 
+/// How wide `text` draws at `size`.
+fn text_width(text: &str, size: f32, weight: FontWeight, window: &Window) -> f32 {
+    let mut run = window.text_style().to_run(text.len());
+    run.font.weight = weight;
+    let line = window
+        .text_system()
+        .shape_line(text.to_owned().into(), px(size), &[run], None);
+    f32::from(line.width)
+}
+
+/// `text` cut to end in "…" within `width`, by the same `measure` that
+/// sizes the rest of the line. GPUI's own ellipsis is decided at the first
+/// layout pass and keeps that result, so a flex item never gets one.
+fn ellipsize(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= width {
+        return text.to_owned();
+    }
+    let mut kept = text.to_owned();
+    while kept.pop().is_some() {
+        let cut = format!("{}…", kept.trim_end());
+        if measure(&cut) <= width {
+            return cut;
+        }
+    }
+    String::new()
+}
+
+/// What a row takes from the Library's width before its text: the list's
+/// and the row's 12 px padding on both sides, the 20 px icon, its 10 px gap
+/// and the 1 px border.
+const ROW_COPY_INSET: f32 = 24.0 + 24.0 + 20.0 + 10.0 + 1.0;
+
 fn sidebar(
     library: &visper::Library,
+    window: &Window,
+    view: &LibraryView,
     ui: &Ui,
     layout: Layout,
     timing: Option<&Timing>,
@@ -871,23 +993,47 @@ fn sidebar(
             let mut meta = div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
-                .child(status(recording, palette));
+                .gap(px(META_GAP))
+                .child(status(recording, palette).flex_none());
             let running = timing.filter(|timing| timing.path == recording.path);
+            let mut text = None;
             if recording.is_missing() {
                 meta = meta.child(small("· 文件缺失", palette).text_color(rgb(palette.warning)));
             } else if let Some(timing) = running {
-                meta = meta.child(
-                    small(format!("· {}", remaining_label(timing)), palette)
-                        .min_w_0()
-                        .truncate(),
-                );
+                text = Some(format!("· {}", remaining_label(timing)));
             } else if let Some(duration) = recording.duration_ms() {
-                let mut text = format!("· {}", duration_label(duration));
+                let mut line = format!("· {}", duration_label(duration));
                 if let Some(took) = recording.transcription_ms() {
-                    text.push_str(&format!(" · 用时 {}", duration_label(took)));
+                    line.push_str(&format!(" · 用时 {}", duration_label(took)));
                 }
-                meta = meta.child(small(text, palette).min_w_0().truncate());
+                text = Some(line);
+            }
+            let tag = recording.shown_model();
+            if let Some(text) = text {
+                // What the status and the tag leave of the line, so that only
+                // the text gives way, and with an ellipsis.
+                let mut taken = STATUS_ICON
+                    + STATUS_GAP
+                    + text_width(
+                        recording.status.label(),
+                        m::SMALL_SIZE,
+                        FontWeight::NORMAL,
+                        window,
+                    )
+                    + META_GAP;
+                if let Some(model) = tag {
+                    taken += TAG_PAD_X * 2.0
+                        + text_width(model.short_name(), TAG_SIZE, FontWeight::MEDIUM, window)
+                        + META_GAP;
+                }
+                let width = (layout.sidebar - ROW_COPY_INSET - taken).max(0.0);
+                let text = ellipsize(&text, width, |text| {
+                    text_width(text, m::SMALL_SIZE, FontWeight::NORMAL, window)
+                });
+                meta = meta.child(small(text, palette).flex_none());
+            }
+            if let Some(model) = tag {
+                meta = meta.child(model_tag(model, palette));
             }
             copy = copy.child(meta);
             if let Some(progress) = recording.progress() {
@@ -921,7 +1067,7 @@ fn sidebar(
                 .px(px(12.0))
                 .pb(px(8.0))
                 .flex_none()
-                .child(add_recording(ui, cx)),
+                .child(add_recording(library.can_add(), ui, cx)),
         )
         .child(
             div()
@@ -937,20 +1083,251 @@ fn sidebar(
                         .text_color(rgb(palette.tertiary)),
                 ),
         )
-        .child(list)
+        .child(view.bar.wrap(list, &view.scroll, palette))
+        .child(model_footer(library, view.model_open, ui, cx))
+}
+
+/// The Model on each line of the popover.
+fn model_selector(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "model-large-v3",
+        visper::Model::LargeV3Turbo => "model-large-v3-turbo",
+    }
+}
+
+fn footer_label_selector(model: Option<visper::Model>) -> &'static str {
+    match model {
+        Some(visper::Model::LargeV3) => "footer-label-large-v3",
+        Some(visper::Model::LargeV3Turbo) => "footer-label-large-v3-turbo",
+        None => "footer-label-none",
+    }
+}
+
+/// The weight's size as the popover and the first-launch cards state it.
+fn download_size(model: visper::Model) -> String {
+    format!("{:.1} GB", model.bytes() as f64 / 1e9)
+}
+
+fn model_blurb(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "更准，较慢",
+        visper::Model::LargeV3Turbo => "更快，略不准",
+    }
+}
+
+/// What a Library row's second line is made of, so that the width left for
+/// its text can be worked out from the same numbers that draw it.
+const TAG_PAD_X: f32 = 6.0;
+const TAG_SIZE: f32 = 11.0;
+const STATUS_ICON: f32 = 14.0;
+const STATUS_GAP: f32 = 6.0;
+const META_GAP: f32 = 6.0;
+
+/// 11 / 16 Medium on a faint wash, the same over a row, a selected row and
+/// a selected option.
+fn model_tag(model: visper::Model, palette: Palette) -> Div {
+    div()
+        .flex_none()
+        .px(px(TAG_PAD_X))
+        .rounded(px(4.0))
+        .bg(tint(palette.ink, 0.08))
+        .whitespace_nowrap()
+        .text_size(px(TAG_SIZE))
+        .line_height(px(16.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(palette.secondary))
+        .child(model.short_name())
+}
+
+/// The 48 px strip at the bottom of the Library. 本机转写 and the lock are
+/// plain text; only the current Model's name and arrow are a button, small
+/// and inset from the strip's edges, with the Model popover hanging above.
+fn model_footer(
+    library: &visper::Library,
+    open: bool,
+    ui: &Ui,
+    cx: &mut Context<VisperWindow>,
+) -> Div {
+    let palette = ui.palette;
+    let id = SharedString::from("model-footer");
+    let level = ui.motion.hover(&id);
+    let current = library.model();
+    let button = div()
+        .id(id.clone())
+        .debug_selector(|| "model-footer".into())
+        .flex_none()
+        .px(px(8.0))
+        .py(px(6.0))
+        .gap(px(6.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .bg(tint(palette.ink, 0.06 * level))
+        .active(move |style| style.bg(tint(palette.ink, 0.11)))
+        .child(
+            match current {
+                Some(model) => small(model.full_name(), palette)
+                    .text_color(rgb(palette.ink))
+                    .font_weight(FontWeight::MEDIUM),
+                None => small("未选模型", palette),
+            }
+            .flex_none()
+            .whitespace_nowrap()
+            .debug_selector(move || footer_label_selector(current).into()),
+        )
+        .child(icon("chevron-up", palette.secondary, 10.0));
+    let button = ui
+        .interactive(button, &id, 6.0, Ring::Outside, cx)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.model_open = !this.model_open;
+            cx.notify();
+        }));
+    let row = div()
+        .h(px(47.0))
+        .flex()
+        .items_center()
+        .justify_between()
         .child(
             div()
-                .mx(px(20.0))
-                .h(px(48.0))
-                .flex_none()
-                .border_t_1()
-                .border_color(rgb(palette.line))
+                .px(px(8.0))
                 .flex()
                 .items_center()
                 .gap(px(8.0))
                 .child(icon("lock", palette.secondary, 14.0))
-                .child(small("本机转写", palette)),
+                .child(small("本机转写", palette).flex_none().whitespace_nowrap()),
         )
+        .child(button);
+    let mut footer = div()
+        .relative()
+        .flex_none()
+        .w_full()
+        .px(px(12.0))
+        .child(div().mx(px(8.0)).h(px(1.0)).bg(rgb(palette.line)))
+        .child(row);
+    if open {
+        // The popover hangs above this anchor, so a press on an option is
+        // outside the anchor's box; close on mouse up, as the 更多 menu does,
+        // so the option's click runs first.
+        footer = footer
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.model_open = false;
+                    cx.notify();
+                }),
+            )
+            .child(model_popover(library, ui, cx));
+    }
+    footer
+}
+
+fn model_popover(library: &visper::Library, ui: &Ui, cx: &mut Context<VisperWindow>) -> Div {
+    let palette = ui.palette;
+    let mut popover = div()
+        .occlude()
+        .absolute()
+        .bottom(px(48.0))
+        .left(px(12.0))
+        .right(px(12.0))
+        .p(px(6.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(rgb(palette.line))
+        .bg(rgb(palette.raised))
+        .shadow(popover_shadow(palette))
+        .child(
+            div()
+                .pt(px(6.0))
+                .px(px(10.0))
+                .pb(px(4.0))
+                .text_size(px(11.0))
+                .line_height(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(palette.tertiary))
+                .child("转写模型"),
+        );
+    for model in visper::Model::ALL {
+        let id = SharedString::from(model_selector(model));
+        let level = ui.motion.hover(&id);
+        let chosen = library.model() == Some(model);
+        let state = if library.is_on_disk(model) {
+            "已下载".to_owned()
+        } else if library.is_downloading(model) {
+            "下载中".to_owned()
+        } else {
+            format!("需下载 {}", download_size(model))
+        };
+        let option = div()
+            .id(id.clone())
+            .debug_selector(move || model_selector(model).into())
+            .w_full()
+            .px(px(10.0))
+            .py(px(8.0))
+            .gap(px(8.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .bg(if chosen {
+                rgb(mix(palette.playing, palette.ink, 0.06 * level))
+            } else {
+                tint(palette.ink, 0.06 * level)
+            })
+            .active(move |style| style.bg(tint(palette.ink, 0.10)))
+            .child(
+                div()
+                    .w(px(16.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .children(chosen.then(|| icon("tick", palette.accent, 14.0))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                label(model.full_name())
+                                    .flex_none()
+                                    .whitespace_nowrap()
+                                    .font_weight(FontWeight::MEDIUM),
+                            )
+                            .child(model_tag(model, palette)),
+                    )
+                    .child(small(format!("{} · {state}", model_blurb(model)), palette).truncate()),
+            );
+        popover = popover.child(
+            ui.interactive(option, &id, 6.0, Ring::Inside, cx)
+                .on_click(cx.listener(move |this, _, _, cx| this.choose_model(model, cx))),
+        );
+    }
+    popover.child(
+        div()
+            .mt(px(4.0))
+            .px(px(10.0))
+            .pt(px(6.0))
+            .pb(px(4.0))
+            .border_t_1()
+            .border_color(rgb(palette.line))
+            .text_size(px(11.0))
+            .line_height(px(16.0))
+            .text_color(rgb(palette.tertiary))
+            .truncate()
+            .child("只影响之后开始的转写，已有转写稿不变"),
+    )
+}
+
+/// What the Library column draws besides the Library itself.
+struct LibraryView {
+    model_open: bool,
+    scroll: gpui::ScrollHandle,
+    bar: Scrollbar,
 }
 
 struct SelectionView {
@@ -960,6 +1337,7 @@ struct SelectionView {
     selection: std::rc::Rc<std::cell::RefCell<TextSelection>>,
     focus: gpui::FocusHandle,
     scroll: gpui::ScrollHandle,
+    bar: Scrollbar,
 }
 
 fn detail(
@@ -967,12 +1345,22 @@ fn detail(
     view: &SelectionView,
     ui: &Ui,
     layout: Layout,
+    below_bar: bool,
     timing: Option<&Timing>,
     cx: &mut Context<VisperWindow>,
 ) -> gpui::AnyElement {
     let palette = ui.palette;
     let Some(recording) = library.selected() else {
-        return empty_detail(library.is_empty(), ui, layout, cx).into_any_element();
+        return empty_detail(
+            library.is_empty(),
+            library.model().is_none(),
+            library.can_add(),
+            below_bar,
+            ui,
+            layout,
+            cx,
+        )
+        .into_any_element();
     };
     let header = div()
         .px(px(layout.padding))
@@ -1004,6 +1392,11 @@ fn detail(
                     recording
                         .transcription_ms()
                         .map(|took| small(format!("转写用时 {}", duration_label(took)), palette)),
+                )
+                .children(
+                    recording
+                        .shown_model()
+                        .map(|model| small(model.full_name(), palette)),
                 ),
         )
         .children(
@@ -1014,8 +1407,7 @@ fn detail(
         .children(missing_file(recording, palette))
         .children(failure(recording, palette))
         .children(
-            (recording.status == visper::Status::Queued
-                && library.weight() != &visper::Weight::Ready)
+            (recording.status == visper::Status::Queued && !library.is_ready())
                 .then(|| small("模型准备完成后自动开始", palette)),
         )
         .children(
@@ -1122,12 +1514,7 @@ fn detail_actions(
             .border_1()
             .border_color(rgb(palette.line))
             .bg(rgb(palette.raised))
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(12.0),
-                spread_radius: px(0.0),
-            }])
+            .shadow(popover_shadow(palette))
             .child(
                 button(
                     "remove",
@@ -1482,12 +1869,24 @@ fn failure(recording: &visper::Recording, palette: Palette) -> Option<Div> {
     ))
 }
 
-fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWindow>) -> Div {
+fn empty_detail(
+    empty: bool,
+    choosing: bool,
+    can_add: bool,
+    below_bar: bool,
+    ui: &Ui,
+    layout: Layout,
+    cx: &mut Context<VisperWindow>,
+) -> Div {
     let palette = ui.palette;
+    // The dashed zone is inset from the strip or notice bar above it by as
+    // much as from the other three edges; under the bare header (which has
+    // no line to touch) it keeps the body's usual 4 px.
     let pane = div()
         .flex_1()
         .min_h_0()
         .px(px(layout.padding))
+        .pt(px(if below_bar { layout.padding } else { 4.0 }))
         .pb(px(layout.padding))
         .flex()
         .flex_col();
@@ -1504,13 +1903,15 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
         "选择录音",
         None,
         Emphasis::Primary,
-        true,
+        can_add,
         ui,
         cx,
     )
     .h(px(40.0))
     .px(px(20.0));
-    pick = pick.on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)));
+    if can_add {
+        pick = pick.on_click(cx.listener(|this, _, _, cx| this.pick_file(cx)));
+    }
     pane.child(
         div()
             .flex_1()
@@ -1522,10 +1923,12 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
             .border_dashed()
             .border_color(rgb(palette.line))
             .rounded(px(8.0))
-            .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                style
-                    .border_color(rgb(palette.accent))
-                    .bg(rgb(palette.playing))
+            .when(can_add, |zone| {
+                zone.drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style
+                        .border_color(rgb(palette.accent))
+                        .bg(rgb(palette.playing))
+                })
             })
             .child(
                 div()
@@ -1544,15 +1947,26 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("把录音变成文字"),
                     )
-                    .child(label("拖入录音，或选择本机文件").text_color(rgb(palette.secondary)))
-                    .child(div().mt(px(8.0)).child(pick))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
-                            .text_color(rgb(palette.tertiary))
-                            .child("M4A · MP3 · WAV · FLAC · AAC"),
-                    )
+                    .children(if choosing {
+                        model_choice(ui, cx)
+                    } else {
+                        vec![
+                            label(if can_add {
+                                "拖入录音，或选择本机文件"
+                            } else {
+                                "模型下载完成后，拖入录音或选择本机文件"
+                            })
+                            .text_color(rgb(palette.secondary))
+                            .into_any_element(),
+                            div().mt(px(8.0)).child(pick).into_any_element(),
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(rgb(palette.tertiary))
+                                .child("M4A · MP3 · WAV · FLAC · AAC")
+                                .into_any_element(),
+                        ]
+                    })
                     .child(
                         div()
                             .mt(px(32.0))
@@ -1566,13 +1980,99 @@ fn empty_detail(empty: bool, ui: &Ui, layout: Layout, cx: &mut Context<VisperWin
     )
 }
 
+/// First launch: the line, one card per Model and the note under them.
+/// Nothing is preselected; a click chooses the Model and starts its download.
+fn model_choice(ui: &Ui, cx: &mut Context<VisperWindow>) -> Vec<gpui::AnyElement> {
+    let palette = ui.palette;
+    let cards = visper::Model::ALL.into_iter().map(|model| {
+        let id = SharedString::from(first_model_selector(model));
+        let level = ui.motion.hover(&id);
+        let card = div()
+            .id(id.clone())
+            .debug_selector(move || first_model_selector(model).into())
+            .flex_1()
+            .min_w_0()
+            .px(px(16.0))
+            .py(px(14.0))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(4.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(rgb(mix(palette.line, palette.ink, 0.06 * level)))
+            .bg(rgb(mix(palette.raised, palette.ink, 0.04 * level)))
+            .active(move |style| style.bg(rgb(mix(palette.raised, palette.ink, 0.08))))
+            .text_left()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        label(model.full_name())
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .font_weight(FontWeight::SEMIBOLD),
+                    )
+                    .child(model_tag(model, palette)),
+            )
+            .child(
+                small(first_model_note(model), palette)
+                    .text_size(px(11.0))
+                    .line_height(px(16.0))
+                    .whitespace_nowrap(),
+            )
+            .child(
+                small(format!("下载 {}", download_size(model)), palette)
+                    .mt(px(4.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(palette.accent)),
+            );
+        ui.interactive(card, &id, 10.0, Ring::Outside, cx)
+            .on_click(cx.listener(move |this, _, _, cx| this.choose_model(model, cx)))
+    });
+    vec![
+        label("先选一个转写模型，点一下就开始下载")
+            .text_color(rgb(palette.secondary))
+            .into_any_element(),
+        div()
+            .mt(px(8.0))
+            .w(px(440.0))
+            .flex()
+            .gap(px(12.0))
+            .children(cards)
+            .into_any_element(),
+        div()
+            .text_size(px(11.0))
+            .line_height(px(16.0))
+            .text_color(rgb(palette.tertiary))
+            .child("模型下载完成后就能加入录音")
+            .into_any_element(),
+    ]
+}
+
+fn first_model_selector(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "first-model-large-v3",
+        visper::Model::LargeV3Turbo => "first-model-large-v3-turbo",
+    }
+}
+
+fn first_model_note(model: visper::Model) -> &'static str {
+    match model {
+        visper::Model::LargeV3 => "准确度最高，适合专有名词多的访谈",
+        visper::Model::LargeV3Turbo => "快得多，准确度略低，适合日常会议",
+    }
+}
+
 fn transcript(
     recording: &visper::Recording,
     view: &SelectionView,
     ui: &Ui,
     layout: Layout,
     cx: &mut Context<VisperWindow>,
-) -> Stateful<Div> {
+) -> Div {
     let palette = ui.palette;
     let playing_segment = view
         .playback
@@ -1580,7 +2080,6 @@ fn transcript(
     let segments = recording.visible_segments();
     let selection = view.selection.clone();
     let focus = view.focus.clone();
-    let scroll = view.scroll.clone();
     let mut content = div()
         .max_w(px(m::READING_WIDTH))
         .w_full()
@@ -1732,13 +2231,13 @@ fn transcript(
                 .child(small("正在转写后续内容…", palette)),
         );
     }
-    div()
+    let area = div()
         .id("transcript")
+        .debug_selector(|| "transcript".into())
         .flex_1()
         .min_h_0()
         .px(px(layout.padding))
         .overflow_y_scroll()
-        .track_scroll(&scroll)
         .track_focus(&focus)
         .on_mouse_up(
             MouseButton::Left,
@@ -1748,7 +2247,8 @@ fn transcript(
             MouseButton::Left,
             cx.listener(|this, _, _, _| this.selection.borrow_mut().selecting = false),
         )
-        .child(content)
+        .child(content);
+    view.bar.wrap(area, &view.scroll, palette)
 }
 
 fn playback_bar(
@@ -1826,8 +2326,8 @@ fn duration_label(ms: u64) -> String {
     time_label(ms, ms >= 3_600_000)
 }
 
-pub fn open(store: Store, weight: std::path::PathBuf, cx: &mut App) -> WindowHandle<VisperWindow> {
-    open_with(cx, move |cx| VisperWindow::new(store, weight, cx))
+pub fn open(store: Store, support: std::path::PathBuf, cx: &mut App) -> WindowHandle<VisperWindow> {
+    open_with(cx, move |cx| VisperWindow::new(store, support, cx))
 }
 
 pub(super) fn open_with(
@@ -1881,6 +2381,17 @@ mod tests {
             remaining_ms: ms,
             speed: None,
         })
+    }
+
+    #[test]
+    fn a_text_that_does_not_fit_ends_in_an_ellipsis() {
+        let ten_per_char = |text: &str| text.chars().count() as f32 * 10.0;
+        assert_eq!(ellipsize("· 40:00", 70.0, ten_per_char), "· 40:00");
+        assert_eq!(
+            ellipsize("· 40:00 · 用时", 100.0, ten_per_char),
+            "· 40:00 ·…"
+        );
+        assert_eq!(ellipsize("· 40:00", 5.0, ten_per_char), "");
     }
 
     #[test]
@@ -1938,6 +2449,71 @@ mod tests {
         assert_eq!(selection.range(0, "中文"), Some(0..6));
     }
 
+    /// A fresh support directory for one test, which removes it at the end.
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "visper-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The Model written to the library file, if any.
+    fn saved_model(library_file: &std::path::Path) -> Option<String> {
+        let saved = std::fs::read_to_string(library_file).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        saved["model"].as_str().map(str::to_owned)
+    }
+
+    /// Starts no download, so that a click cannot reach the network.
+    struct NoDownloads;
+    impl visper::Downloader for NoDownloads {
+        fn start(&mut self, _: visper::Model) {}
+        fn abandon(&mut self, _: visper::Model) {}
+    }
+
+    fn open_offline(
+        cx: &mut gpui::TestAppContext,
+        library_file: &std::path::Path,
+        dir: &std::path::Path,
+    ) -> WindowHandle<VisperWindow> {
+        cx.update(|cx| {
+            open_with(cx, {
+                let store = crate::store::Store::new(library_file.to_owned());
+                let support = dir.to_owned();
+                move |cx| {
+                    let mut view = VisperWindow::new(store, support, cx);
+                    view.downloader = Box::new(NoDownloads);
+                    view
+                }
+            })
+        })
+    }
+
+    /// With no Model on disk adding is off, and a file handed to the window
+    /// anyway is not added.
+    fn assert_adding_is_refused(
+        window: WindowHandle<VisperWindow>,
+        cx: &mut gpui::VisualTestContext,
+        recording: &std::path::Path,
+    ) {
+        window
+            .update(cx, |view, _, cx| {
+                assert!(!view.library.can_add());
+                view.open_files(vec![recording.to_owned()], cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| assert!(view.library.recordings().is_empty()))
+            .unwrap();
+    }
+
     fn recording_count(library_file: &std::path::Path) -> usize {
         let saved = std::fs::read_to_string(library_file).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
@@ -1955,15 +2531,7 @@ mod tests {
     /// unmount 从资料库移除 before the click, so the press did nothing.
     #[gpui::test]
     fn remove_from_library_confirms_then_drops_the_recording(cx: &mut gpui::TestAppContext) {
-        let dir = std::env::temp_dir().join(format!(
-            "visper-remove-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("remove");
         let library_file = dir.join("library.json");
         let recording = "/tmp/visper-remove-test.m4a";
         std::fs::write(
@@ -1982,12 +2550,16 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        std::fs::write(dir.join("weight.bin"), b"weight").unwrap();
+        std::fs::write(
+            crate::download::weight_path(&dir, visper::Model::LargeV3),
+            b"weight",
+        )
+        .unwrap();
 
         let window = cx.update(|cx| {
             open(
                 crate::store::Store::new(library_file.clone()),
-                dir.join("weight.bin"),
+                dir.clone(),
                 cx,
             )
         });
@@ -2011,6 +2583,173 @@ mod tests {
         cx.simulate_prompt_answer("移除");
         cx.run_until_parked();
         assert_eq!(recording_count(&library_file), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn picking_the_other_model_from_the_footer_changes_the_label_and_the_saved_model(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = scratch_dir("model");
+        let library_file = dir.join("library.json");
+        std::fs::write(&library_file, r#"{"recordings":[],"selected":null}"#).unwrap();
+        // Both weights are stored, so choosing one starts no download.
+        for model in visper::Model::ALL {
+            std::fs::write(crate::download::weight_path(&dir, model), b"weight").unwrap();
+        }
+
+        let window = cx.update(|cx| {
+            open(
+                crate::store::Store::new(library_file.clone()),
+                dir.clone(),
+                cx,
+            )
+        });
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+
+        // GPUI keeps an element's debug bounds after it stops being drawn, so
+        // only an element's first appearance is checked from them.
+        let popover_open = |cx: &mut gpui::VisualTestContext| {
+            window.read_with(cx, |view, _| view.model_open).unwrap()
+        };
+
+        // A library from before the choice comes up as Large v3.
+        assert!(cx.debug_bounds("footer-label-large-v3").is_some());
+        assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_none());
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3"));
+        assert!(!popover_open(cx));
+
+        click(cx, "model-footer");
+        assert!(popover_open(cx));
+        assert!(cx.debug_bounds("model-large-v3").is_some());
+        assert!(cx.debug_bounds("model-large-v3-turbo").is_some());
+
+        cx.simulate_keystrokes("escape");
+        assert!(!popover_open(cx));
+
+        click(cx, "model-footer");
+        assert!(popover_open(cx));
+        let option = cx.debug_bounds("model-large-v3-turbo").unwrap();
+        cx.simulate_click(
+            gpui::point(option.right() + gpui::px(200.0), option.center().y),
+            gpui::Modifiers::default(),
+        );
+        assert!(!popover_open(cx));
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3"));
+
+        click(cx, "model-footer");
+        click(cx, "model-large-v3-turbo");
+        cx.run_until_parked();
+
+        assert!(!popover_open(cx));
+        assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3Turbo"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn clicking_a_first_launch_card_saves_that_model_and_starts_its_download(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = scratch_dir("first-launch");
+        let library_file = dir.join("library.json");
+        let recording = dir.join("会议.m4a");
+        std::fs::write(&recording, b"audio").unwrap();
+
+        // No library file and no weight: a fresh install.
+        let window = open_offline(cx, &library_file, &dir);
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+
+        assert!(cx.debug_bounds("footer-label-none").is_some());
+        assert!(cx.debug_bounds("first-model-large-v3").is_some());
+        assert!(cx.debug_bounds("first-model-large-v3-turbo").is_some());
+        let download = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |view, _| view.library.download().clone())
+                .unwrap()
+        };
+        assert_eq!(download(cx), visper::Download::Idle);
+
+        click(cx, "first-model-large-v3-turbo");
+        cx.run_until_parked();
+
+        assert_eq!(saved_model(&library_file).as_deref(), Some("LargeV3Turbo"));
+        assert!(matches!(
+            download(cx),
+            visper::Download::Running {
+                model: visper::Model::LargeV3Turbo,
+                ..
+            }
+        ));
+        assert!(cx.debug_bounds("footer-label-large-v3-turbo").is_some());
+        // Downloading is not a Model on disk: adding stays off.
+        assert_adding_is_refused(window, cx, &recording);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn with_no_weight_on_disk_nothing_can_be_added_until_a_download_finishes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = scratch_dir("no-model");
+        let library_file = dir.join("library.json");
+        let recording = dir.join("会议.m4a");
+        std::fs::write(&recording, b"audio").unwrap();
+
+        let window = open_offline(cx, &library_file, &dir);
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+        let added = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |view, _| view.library.recordings().len())
+                .unwrap()
+        };
+        // The test platform has no file picker and panics if one is asked
+        // for, so a click that gets through fails this test.
+        assert!(cx.debug_bounds("add-recording").is_some());
+        click(cx, "add-recording");
+        cx.run_until_parked();
+        assert_eq!(added(cx), 0);
+
+        window
+            .update(cx, |view, _, cx| {
+                view.pick_file(cx);
+                view.open_files(vec![recording.clone()], cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(added(cx), 0);
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.notice.clone())
+                .unwrap()
+                .as_deref(),
+            Some("模型下载完成后才能加入录音")
+        );
+
+        // First download running: still no Model on disk.
+        click(cx, "first-model-large-v3");
+        cx.run_until_parked();
+
+        assert_adding_is_refused(window, cx, &recording);
+
+        window
+            .update(cx, |view, _, cx| {
+                view.library
+                    .download_finished(visper::Model::LargeV3, &mut view.transcriber);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, cx| {
+                view.open_files(vec![recording.clone()], cx);
+            })
+            .unwrap();
+        assert_eq!(added(cx), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
