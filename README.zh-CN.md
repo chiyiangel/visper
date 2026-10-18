@@ -47,9 +47,24 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 - Windows 上需要提供 Vulkan 的显卡驱动（`vulkan-1.dll`，新版 NVIDIA、AMD、Intel 驱动都带）和 [Microsoft Visual C++ 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)。没有 `vulkan-1.dll` 时 Visper 无法启动。
 - 构建需要：Rust stable（`rust-toolchain.toml` 会自动安装），以及下面各平台的工具
 
-## 构建与运行
+## 下载
 
-目前还没有预编译的发布包，需要从源码构建。
+推送版本标签（`v*`）时，预编译包会附在 [GitHub Releases](https://github.com/chiyiangel/visper/releases) 上，由[发布工作流](.github/workflows/release.yml)在对应平台的原生 runner 上构建。在打上第一个标签之前没有发布包，需要从源码构建。
+
+| 包 | 平台 |
+| --- | --- |
+| `Visper-<版本>-arm64.dmg` | Apple Silicon 的 macOS |
+| `Visper-<版本>-windows-x86_64.zip` | x86_64 的 Windows 10/11 |
+
+磁盘映像是临时（ad hoc）签名，没有公证，所以在构建机以外的 Mac 上会被 Gatekeeper 拦截。把 Visper 拖进“应用程序”后，按住 Control 点按应用，选择“打开”，再点一次“打开”。如果仍然被拦截，到“系统设置 → 隐私与安全性”里允许。如果系统提示应用已损坏，清掉下载隔离属性：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Visper.app
+```
+
+Windows 的 zip 里是 `visper.exe` 和一份简短说明。它同样需要 `vulkan-1.dll` 和 Visual C++ 运行库，见上面的环境要求。`<版本>` 取自 `Cargo.toml` 的 `version`，并且和标签一致：标签 `v1.2.3` 发布的是 `Visper-1.2.3-…`。
+
+## 构建与运行
 
 ### macOS
 
@@ -81,7 +96,7 @@ Visper 有意不做：麦克风实时录音、翻译、摘要、说话人标注�
 scripts/bundle-macos.sh --dmg
 ```
 
-产物 `Visper.app` 和 `Visper-<版本>-arm64.dmg` 在 `target/release/bundle/` 下。它使用临时（ad hoc）签名，在构建它的 Mac 上可以直接打开；在其他 Mac 上，需要先在“系统设置 → 隐私与安全性”里允许。要对外分发，把 `VISPER_SIGN_IDENTITY` 设为 Developer ID Application 证书，把 `VISPER_NOTARY_PROFILE` 设为 `xcrun notarytool store-credentials` 保存的配置名：脚本会用强化运行时签名，并对磁盘映像做公证和装订。CI 会构建同样的磁盘映像，作为 `visper-macos-arm64` artifact。
+在 Apple Silicon 上，产物 `Visper.app` 和 `Visper-<版本>-arm64.dmg` 在 `target/release/bundle/` 下。它使用临时（ad hoc）签名，在构建它的 Mac 上可以直接打开；在其他 Mac 上，需要先在“系统设置 → 隐私与安全性”里允许。要对外分发，把 `VISPER_SIGN_IDENTITY` 设为 Developer ID Application 证书，把 `VISPER_NOTARY_PROFILE` 设为 `xcrun notarytool store-credentials` 保存的配置名：脚本会用强化运行时签名，并对磁盘映像做公证和装订。CI 会构建同样的磁盘映像，作为 `visper-macos-arm64` artifact；打版本标签时会把它发布到 Release。
 
 ### Windows
 
@@ -106,7 +121,7 @@ scripts/bundle-macos.sh --dmg
    cd visper && cargo run --release
    ```
 
-只支持 `x86_64-pc-windows-msvc`。每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 里构建 `visper.exe`，作为 `visper-windows-x86_64` artifact 附在那次运行上。
+只支持 `x86_64-pc-windows-msvc`。每次 push 和 pull request 都会在 [CI](.github/workflows/ci.yml) 里构建 `visper.exe`，作为 `visper-windows-x86_64` artifact 附在那次运行上。打版本标签时，会把这个 exe（和一份简短说明）打成 zip 并发布到 Release。
 
 ### 数据存放位置
 
