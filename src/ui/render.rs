@@ -557,7 +557,14 @@ impl Render for VisperWindow {
                             style.bg(rgb(palette.playing))
                         })
                     })
-                    .child(pane_header(library.selected(), &view, &ui, layout, cx))
+                    .child(pane_header(
+                        library.selected(),
+                        &view,
+                        &ui,
+                        layout,
+                        window,
+                        cx,
+                    ))
                     .children(strip)
                     .children(notice)
                     .child(detail(
@@ -580,6 +587,7 @@ fn pane_header(
     view: &SelectionView,
     ui: &Ui,
     layout: Layout,
+    window: &Window,
     cx: &mut Context<VisperWindow>,
 ) -> Div {
     div()
@@ -590,18 +598,106 @@ fn pane_header(
         .gap(px(16.0))
         .flex()
         .items_center()
-        .window_control_area(WindowControlArea::Drag)
-        .children(recording.map(|recording| {
+        // GPUI checks control areas in paint order, so a Windows drag area
+        // must not cover the caption buttons painted inside the header.
+        .when(!cfg!(target_os = "windows"), |header| {
+            header.window_control_area(WindowControlArea::Drag)
+        })
+        .child(
             div()
                 .flex_1()
                 .min_w_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .window_control_area(WindowControlArea::Drag)
                 .text_size(px(14.0))
                 .line_height(px(20.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .truncate()
-                .child(recording.file_name())
-        }))
+                .children(recording.map(|recording| recording.file_name())),
+        )
         .children(recording.map(|recording| detail_actions(recording, view, ui, cx)))
+        .when(cfg!(target_os = "windows"), |header| {
+            header.child(window_controls(window.is_maximized(), ui, cx))
+        })
+}
+
+/// Client-drawn caption buttons share the app's palette. Native hit areas keep
+/// Windows dragging and snap layouts, while clicks use the same close guard
+/// as the menu and keyboard shortcuts.
+fn window_controls(maximized: bool, ui: &Ui, cx: &mut Context<VisperWindow>) -> Div {
+    let palette = ui.palette;
+    // Caption buttons use Windows keyboard shortcuts rather than Tab stops.
+    // In GPUI 0.2, zoom_window only maximizes on Windows; native hit areas also
+    // restore the window and expose the system's snap layout chooser.
+    let control = |id: &'static str, glyph, name: &'static str, area| {
+        let hover = ui.motion.hover(id);
+        let wash = if area == WindowControlArea::Close {
+            palette.danger
+        } else {
+            palette.ink
+        };
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .w(px(40.0))
+            .h(px(m::BUTTON))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(m::BUTTON_RADIUS))
+            .bg(tint(wash, 0.08 * hover))
+            .active(move |style| style.bg(tint(wash, 0.14)))
+            .on_hover(ui.motion.on_hover(id.into()))
+            .window_control_area(area)
+            .child(icon(
+                glyph,
+                mix(palette.secondary, palette.ink, hover),
+                16.0,
+            ))
+            .tooltip(move |_, cx| {
+                cx.new(|_| Tooltip {
+                    text: name.into(),
+                    palette,
+                })
+                .into()
+            })
+    };
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(control(
+            "window-minimize",
+            "window-minimize",
+            "最小化",
+            WindowControlArea::Min,
+        ))
+        .child(control(
+            "window-maximize",
+            if maximized {
+                "window-restore"
+            } else {
+                "window-maximize"
+            },
+            if maximized { "还原" } else { "最大化" },
+            WindowControlArea::Max,
+        ))
+        .child(
+            control(
+                "window-close",
+                "window-close",
+                "关闭",
+                WindowControlArea::Close,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.request_close(window, cx);
+            })),
+        )
 }
 
 fn download_strip(
@@ -2343,7 +2439,8 @@ pub(super) fn open_with(
                 titlebar: Some(TitlebarOptions {
                     title: Some("Visper".into()),
                     appears_transparent: true,
-                    traffic_light_position: Some(point(px(16.0), px(18.0))),
+                    traffic_light_position: cfg!(target_os = "macos")
+                        .then_some(point(px(16.0), px(18.0))),
                 }),
                 ..Default::default()
             },
@@ -2525,6 +2622,54 @@ mod tests {
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("{selector} was not on screen"));
         cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    fn window_close_button_confirms_before_cancelling_a_transcription(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = scratch_dir("window-close");
+        let library_file = dir.join("library.json");
+        let window = open_offline(cx, &library_file, &dir);
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx).into_mut();
+        // A running fixture without starting Whisper or fetching a weight.
+        window
+            .update(cx, |view, _, cx| {
+                view.library = serde_json::from_value(serde_json::json!({
+                    "recordings": [{"path": "会议.m4a", "status": "Transcribing"}],
+                    "selected": "会议.m4a"
+                }))
+                .unwrap();
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        click(cx, "window-close");
+        assert_eq!(
+            cx.pending_prompt().unwrap().0,
+            "正在转写，要退出 Visper 吗？"
+        );
+        cx.simulate_prompt_answer("继续转写");
+        cx.run_until_parked();
+        window
+            .read_with(cx, |view, _| {
+                assert_eq!(
+                    view.library.selected().unwrap().status,
+                    visper::Status::Transcribing
+                );
+            })
+            .unwrap();
+
+        click(cx, "window-close");
+        cx.simulate_prompt_answer("退出");
+        cx.run_until_parked();
+        assert!(window.read_with(cx, |_, _| ()).is_err());
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&library_file).unwrap()).unwrap();
+        assert_eq!(saved["recordings"][0]["status"], "Cancelled");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The menu hangs below the title bar. Closing it on mouse down used to
