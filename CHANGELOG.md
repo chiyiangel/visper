@@ -27,6 +27,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- On Windows, add minimize, maximize/restore and close buttons to the existing header, matching the app's light and dark themes.
 - On macOS, quitting after a model had been loaded crashed with a Metal assertion from ggml. Quitting now frees the model first.
 
 ## [0.1.0]

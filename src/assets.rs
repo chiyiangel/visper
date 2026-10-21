@@ -26,6 +26,10 @@ impl AssetSource for Assets {
             "icons/remove.svg" => include_bytes!("../assets/icons/remove.svg"),
             "icons/chevron-up.svg" => include_bytes!("../assets/icons/chevron-up.svg"),
             "icons/tick.svg" => include_bytes!("../assets/icons/tick.svg"),
+            "icons/window-minimize.svg" => include_bytes!("../assets/icons/window-minimize.svg"),
+            "icons/window-maximize.svg" => include_bytes!("../assets/icons/window-maximize.svg"),
+            "icons/window-restore.svg" => include_bytes!("../assets/icons/window-restore.svg"),
+            "icons/window-close.svg" => include_bytes!("../assets/icons/window-close.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))
@@ -55,6 +59,10 @@ impl AssetSource for Assets {
             "icons/remove.svg".into(),
             "icons/chevron-up.svg".into(),
             "icons/tick.svg".into(),
+            "icons/window-minimize.svg".into(),
+            "icons/window-maximize.svg".into(),
+            "icons/window-restore.svg".into(),
+            "icons/window-close.svg".into(),
         ])
     }
 }
