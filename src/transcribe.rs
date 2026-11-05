@@ -609,7 +609,8 @@ mod tests {
     use super::*;
 
     fn tone(frames: usize, rate: usize) -> impl Iterator<Item = f32> {
-        (0..frames).map(move |i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5)
+        (0..frames)
+            .map(move |i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5)
     }
 
     /// Input length is the whole point: the resampler wants 1026 frames per
@@ -624,8 +625,14 @@ mod tests {
             for frames in [chunk, 2 * chunk, 57 * chunk, 100 * chunk] {
                 let mut audio = Resampled::new(rate).unwrap();
                 audio.push(tone(frames, rate)).unwrap();
-                let out = audio.finish().unwrap_or_else(|e| panic!("{rate} Hz x {frames}: {e}"));
-                assert_eq!(out.len(), frames * SAMPLE_RATE / rate, "{rate} Hz x {frames}");
+                let out = audio
+                    .finish()
+                    .unwrap_or_else(|e| panic!("{rate} Hz x {frames}: {e}"));
+                assert_eq!(
+                    out.len(),
+                    frames * SAMPLE_RATE / rate,
+                    "{rate} Hz x {frames}"
+                );
             }
         }
     }
