@@ -569,10 +569,16 @@ impl Resampled {
         }
         let expected = self.received * SAMPLE_RATE / self.rate;
         let delay = resampler.output_delay();
-        let tail = resampler
-            .process_partial(Some(&[&self.pending[..]]), None)
-            .map_err(|error| failed(&error))?;
-        self.output.extend_from_slice(&tail[0]);
+        // `process_partial` rejects an empty slice (rubato 0.16 turns it into
+        // a 0-length input buffer), which is what is left when the samples
+        // received are an exact multiple of the chunk size. There is nothing
+        // to pad then, and the flush loop below produces the delayed tail.
+        if !self.pending.is_empty() {
+            let tail = resampler
+                .process_partial(Some(&[&self.pending[..]]), None)
+                .map_err(|error| failed(&error))?;
+            self.output.extend_from_slice(&tail[0]);
+        }
         while self.output.len() < expected + delay {
             let flushed = resampler
                 .process_partial::<&[f32]>(None, None)
@@ -596,4 +602,52 @@ fn ms(samples: usize) -> u64 {
 
 fn centiseconds(value: i64) -> u64 {
     value.max(0) as u64 * 10
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tone(frames: usize, rate: usize) -> impl Iterator<Item = f32> {
+        (0..frames).map(move |i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5)
+    }
+
+    /// Input length is the whole point: the resampler wants 1026 frames per
+    /// chunk at 48 kHz, so a length that is a multiple of it leaves nothing
+    /// pending when the stream ends.
+    #[test]
+    fn resampled_finishes_when_input_is_a_whole_number_of_chunks() {
+        for rate in [48_000, 24_000, 44_100, 32_000, 22_050] {
+            let chunk = FftFixedInOut::<f32>::new(rate, SAMPLE_RATE, 1024, 1)
+                .unwrap()
+                .input_frames_next();
+            for frames in [chunk, 2 * chunk, 57 * chunk, 100 * chunk] {
+                let mut audio = Resampled::new(rate).unwrap();
+                audio.push(tone(frames, rate)).unwrap();
+                let out = audio.finish().unwrap_or_else(|e| panic!("{rate} Hz x {frames}: {e}"));
+                assert_eq!(out.len(), frames * SAMPLE_RATE / rate, "{rate} Hz x {frames}");
+            }
+        }
+    }
+
+    #[test]
+    fn resampled_length_matches_for_any_input_length() {
+        for frames in [1, 1025, 1026, 1027, 2052, 5000, 48_000] {
+            let mut audio = Resampled::new(48_000).unwrap();
+            // fed in uneven pieces, like decoder packets
+            let all: Vec<f32> = tone(frames, 48_000).collect();
+            for piece in all.chunks(1152) {
+                audio.push(piece.iter().copied()).unwrap();
+            }
+            let out = audio.finish().unwrap();
+            assert_eq!(out.len(), frames * SAMPLE_RATE / 48_000, "{frames} frames");
+        }
+    }
+
+    #[test]
+    fn resampled_with_no_input_is_empty() {
+        let mut audio = Resampled::new(48_000).unwrap();
+        audio.push(std::iter::empty()).unwrap();
+        assert!(audio.finish().unwrap().is_empty());
+    }
 }
