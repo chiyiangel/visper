@@ -1,6 +1,6 @@
 [package]
 name = "visper"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "Local, offline transcription of Chinese and English recordings with Whisper large-v3"
 authors = ["Liu Jun <chiyiangel@gmail.com>"]
