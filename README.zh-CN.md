@@ -26,11 +26,12 @@ Visper 是一个原生桌面应用，把会议、课程、访谈这类音频文�
 它用 Rust 编写，界面基于 Zed 编辑器背后的 UI 框架 [GPUI](https://www.gpui.rs/)。
 
 > [!NOTE]
-> **状态：早期版本（v0.1）。** 支持 macOS（Apple Silicon）和 Windows 10/11（x86_64），界面语言为简体中文。
-> 预编译安装包**即将提供**，目前请[从源码构建](#从源码构建)。
+> **状态：早期版本（v0.0.1）。** 支持 macOS（Apple Silicon）和 Windows 10/11（x86_64），界面语言为简体中文。
+> 预编译安装包见 [GitHub Releases](https://github.com/chiyiangel/visper/releases/latest)。也可以[从源码构建](#从源码构建)。
 
 ## 目录
 
+- [下载](#下载)
 - [功能](#功能)
 - [界面预览](#界面预览)
 - [工作原理](#工作原理)
@@ -42,6 +43,33 @@ Visper 是一个原生桌面应用，把会议、课程、访谈这类音频文�
 - [路线图](#路线图)
 - [参与贡献](#参与贡献)
 - [许可](#许可)
+
+## 下载
+
+**v0.0.1** 的预编译安装包在 [GitHub Releases](https://github.com/chiyiangel/visper/releases/latest)：
+
+| 平台 | 文件 | 大小 |
+| --- | --- | --- |
+| macOS（Apple Silicon） | [`Visper-0.0.1-arm64.dmg`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/Visper-0.0.1-arm64.dmg) | 约 6.1 MB |
+| Windows（x86_64） | [`Visper-0.0.1-windows-x86_64.zip`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/Visper-0.0.1-windows-x86_64.zip) | 约 24 MB |
+
+校验和：[`SHA256SUMS`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/SHA256SUMS)。
+
+### 安装说明
+
+**macOS。** 打开磁盘映像，把 Visper 拖进“应用程序”。这个版本是 ad hoc 签名、未经公证的，Gatekeeper 会拦住第一次打开：
+
+1. 按住 Control 键点击 `Visper.app`，选“打开”，再点一次“打开”。
+2. 如果仍然被拦，打开“系统设置 → 隐私与安全性”，点“仍要打开”。
+3. 如果系统提示应用已损坏，清掉隔离标记后再打开：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Visper.app
+```
+
+**Windows。** 解压后运行 `visper.exe`。需要提供 `vulkan-1.dll` 的显卡驱动（目前的 NVIDIA、AMD、Intel 驱动都带）和 [Microsoft Visual C++ 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)。没有 `vulkan-1.dll` 时 Visper 无法启动。
+
+**两个平台。** Whisper 模型（Large v3 约 3.1 GB，Turbo 约 1.6 GB）会在首次启动时从 Hugging Face 下载。
 
 ## 功能
 
@@ -246,7 +274,6 @@ cargo run -- --preview completed
 
 ## 路线图
 
-- **预编译安装包**（即将提供）：在 GitHub Releases 上发布 Apple Silicon 的 `.dmg` 和 Windows x86_64 的 `.zip`。[发布工作流](.github/workflows/release.yml)已经可以从 `v*` 标签构建它们。
 - **签名并公证的 macOS 版本。** 打包脚本已支持 Developer ID 签名和公证，目前发布的是 ad hoc 签名版本。
 
 功能范围会继续保持克制（见[不做的事](#不做的事)）。欢迎在 [Issues](https://github.com/chiyiangel/visper/issues) 里提想法和问题。
