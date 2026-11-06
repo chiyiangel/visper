@@ -26,11 +26,12 @@ Visper is a native desktop app for turning audio files (meetings, lectures, inte
 It is written in Rust with [GPUI](https://www.gpui.rs/), the UI framework behind the Zed editor.
 
 > [!NOTE]
-> **Status: early (v0.1).** Visper runs on macOS (Apple Silicon) and Windows 10/11 (x86_64). The interface is in Simplified Chinese.
-> Prebuilt downloads are **coming soon**. For now, [build it from source](#build-from-source).
+> **Status: early (v0.0.1).** Visper runs on macOS (Apple Silicon) and Windows 10/11 (x86_64). The interface is in Simplified Chinese.
+> Prebuilt packages are on [GitHub Releases](https://github.com/chiyiangel/visper/releases/latest). You can also [build from source](#build-from-source).
 
 ## Contents
 
+- [Download](#download)
 - [Features](#features)
 - [What it looks like](#what-it-looks-like)
 - [How it works](#how-it-works)
@@ -42,6 +43,33 @@ It is written in Rust with [GPUI](https://www.gpui.rs/), the UI framework behind
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
+
+## Download
+
+Prebuilt packages for **v0.0.1** are on [GitHub Releases](https://github.com/chiyiangel/visper/releases/latest):
+
+| Platform | File | Size |
+| --- | --- | --- |
+| macOS (Apple Silicon) | [`Visper-0.0.1-arm64.dmg`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/Visper-0.0.1-arm64.dmg) | ≈ 6.1 MB |
+| Windows (x86_64) | [`Visper-0.0.1-windows-x86_64.zip`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/Visper-0.0.1-windows-x86_64.zip) | ≈ 24 MB |
+
+Checksums: [`SHA256SUMS`](https://github.com/chiyiangel/visper/releases/download/v0.0.1/SHA256SUMS).
+
+### Install notes
+
+**macOS.** Open the disk image and drag Visper to Applications. This build is ad hoc signed and not notarized, so Gatekeeper blocks the first launch:
+
+1. Control-click `Visper.app` and choose **Open**, then **Open** again.
+2. If macOS still blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.
+3. If macOS reports that the app is damaged, clear the quarantine flag and open it again:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Visper.app
+```
+
+**Windows.** Unzip and run `visper.exe`. You need a GPU driver that provides `vulkan-1.dll` (current NVIDIA, AMD and Intel drivers do) and the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist). Without `vulkan-1.dll`, Visper does not start.
+
+**Both.** The Whisper model (about 3.1 GB for Large v3, 1.6 GB for Turbo) downloads on first launch from Hugging Face.
 
 ## Features
 
@@ -246,7 +274,6 @@ After changing the SVGs in `assets/brand/`, regenerate the icon with `scripts/ma
 
 ## Roadmap
 
-- **Prebuilt downloads** (coming soon): an Apple Silicon `.dmg` and a Windows x86_64 `.zip` on GitHub Releases. The [release workflow](.github/workflows/release.yml) already builds them from `v*` tags.
 - **Signed and notarized macOS builds.** The bundler supports Developer ID signing and notarization; release builds are ad hoc signed for now.
 
 The scope stays deliberately narrow (see [Out of scope](#out-of-scope)). Ideas and bug reports are welcome in [Issues](https://github.com/chiyiangel/visper/issues).
