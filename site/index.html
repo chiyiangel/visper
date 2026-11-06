@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visper · Private, offline transcription for Chinese and English recordings</title>
+<meta name="description" content="Visper is an open-source desktop app that turns your recordings into timestamped transcripts with Whisper large-v3, entirely offline on macOS and Windows. Mixed Chinese and English, Metal and Vulkan GPU acceleration.">
+<meta name="theme-color" content="#faf9f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1f1c" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Visper · Your recordings, transcribed on your own machine">
+<meta property="og:description" content="Open-source, offline transcription for Chinese, English and mixed recordings. Whisper large-v3 on Metal and Vulkan.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="top">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="Visper">
+      <svg class="mark" viewBox="180 400 910 520" aria-hidden="true"><g fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M865 450H1045" class="m-lines" stroke-width="70"/><path d="M892 557H1045" class="m-lines" stroke-width="70"/><path d="M262 505L430 795C490 860 575 860 630 795L800 485" class="m-vee" stroke-width="140"/></g></svg>
+      <span>Visper</span>
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="#features" data-i18n="nav.features">Features</a>
+      <a href="#how" data-i18n="nav.how">How it works</a>
+      <a href="#models" data-i18n="nav.models">Models</a>
+      <a href="#build" data-i18n="nav.build">Build</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="lang" id="lang" type="button" aria-label="Switch language">中文</button>
+      <a class="btn btn-small btn-ghost" href="https://github.com/chiyiangel/visper" rel="noopener">
+        <svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot"></span><span data-i18n="hero.eyebrow">Open source · macOS &amp; Windows</span></p>
+        <h1 data-i18n-html="hero.title">Your recordings, transcribed.<br><em>On your own machine.</em></h1>
+        <p class="lede" data-i18n="hero.lede">Visper turns meetings, lectures and interviews into timestamped transcripts with Whisper large-v3, fully offline. Chinese, English, or both in the same recording.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/chiyiangel/visper" rel="noopener">
+            <svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span data-i18n="cta.github">View on GitHub</span>
+          </a>
+          <a class="btn btn-secondary" href="https://github.com/chiyiangel/visper/stargazers" rel="noopener">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 .25a.75.75 0 01.67.42l1.88 3.8 4.2.61a.75.75 0 01.41 1.28l-3.04 2.96.72 4.18a.75.75 0 01-1.09.79L8 12.32l-3.75 1.97a.75.75 0 01-1.09-.79l.72-4.18L.84 6.36a.75.75 0 01.41-1.28l4.2-.61L7.33.67A.75.75 0 018 .25z"/></svg>
+            <span data-i18n="cta.star">Star the repo</span>
+          </a>
+        </div>
+        <p class="soon"><span class="pill" data-i18n="soon.pill">Coming soon</span> <span data-i18n="soon.text">Prebuilt downloads are on the way. Today, build from source in a few commands.</span></p>
+      </div>
+
+      <!-- Illustration of the app window, drawn with the app's own palette and sample data -->
+      <figure class="window-wrap">
+        <div class="window" role="img" aria-label="Illustration of the Visper window: a library of recordings on the left and a live transcript on the right">
+          <div class="win-side">
+            <div class="traffic"><i></i><i></i><i></i></div>
+            <div class="side-title" data-i18n="ui.library">资料库</div>
+            <div class="group-label">转写中</div>
+            <div class="row selected">
+              <div class="row-name">产品讨论.m4a</div>
+              <div class="row-meta"><span class="bar"><span style="width:62%"></span></span> 62%</div>
+            </div>
+            <div class="group-label">等待中</div>
+            <div class="row"><div class="row-name">课程录音.mp3</div><div class="row-meta">自动</div></div>
+            <div class="group-label">已结束</div>
+            <div class="row"><div class="row-name">团队周会.m4a</div><div class="row-meta">完成 · <b class="tag">Turbo</b></div></div>
+            <div class="row"><div class="row-name">项目回顾.flac</div><div class="row-meta">完成 · <b class="tag">Large</b></div></div>
+            <div class="side-foot"><span class="model-btn">转写模型 · Large v3</span></div>
+          </div>
+          <div class="win-main">
+            <div class="main-head">
+              <div>
+                <div class="file">产品讨论.m4a</div>
+                <div class="sub">00:01:15 / 00:02:00 · 62% · 还需不到 1 分钟</div>
+              </div>
+              <div class="seg-pill"><span class="on">自动</span><span>中文</span><span>英文</span></div>
+            </div>
+            <ol class="segments">
+              <li><time>00:00:04</time><p>我们先看一下这次产品讨论的目标。</p><span class="lang-chip">zh</span></li>
+              <li><time>00:00:18</time><p>界面需要更清晰，让主要操作自然出现。</p><span class="lang-chip">zh</span></li>
+              <li class="playing"><time>00:00:36</time><p>We should keep the workflow simple and predictable.</p><span class="lang-chip en">en</span></li>
+              <li><time>00:00:52</time><p>语言自动判断，中文和英文都保留原文。</p><span class="lang-chip">zh</span></li>
+              <li class="writing"><time>00:01:16</time><p>接下来讨论导入和转写的反馈<span class="caret"></span></p></li>
+            </ol>
+          </div>
+        </div>
+        <figcaption data-i18n="ui.caption">Illustration of the interface (the app UI is in Simplified Chinese). Sample text from the app's preview data.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Facts strip -->
+  <section class="facts" aria-label="At a glance">
+    <div class="wrap facts-grid">
+      <div><strong data-i18n="facts.offline.t">100% offline</strong><span data-i18n="facts.offline.d">after one model download</span></div>
+      <div><strong>Whisper large-v3</strong><span data-i18n="facts.model.d">or large-v3-turbo, unquantized</span></div>
+      <div><strong>Metal · Vulkan</strong><span data-i18n="facts.gpu.d">with automatic CPU fallback</span></div>
+      <div><strong>Rust + GPUI</strong><span data-i18n="facts.rust.d">native, MIT OR Apache-2.0</span></div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <header class="sec-head">
+        <p class="kicker" data-i18n="features.kicker">Features</p>
+        <h2 data-i18n="features.title">Everything a transcript needs. Nothing it doesn't.</h2>
+        <p data-i18n="features.lede">Built for the recordings you already have, in Chinese, English, or a mix of both.</p>
+      </header>
+      <div class="cards">
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg></div>
+          <h3 data-i18n="f.offline.t">Private by design</h3>
+          <p data-i18n="f.offline.d">The model, your audio and your transcripts stay on your machine. The only network access is the one-time model download from Hugging Face.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h9M4 12h6M4 18h9"/><path d="M15 9l3 6 3-6"/></svg></div>
+          <h3 data-i18n="f.mixed.t">Mixed Chinese &amp; English</h3>
+          <p data-i18n="f.mixed.d">Auto mode splits on silence and detects each stretch as Chinese or English, so a switch mid-meeting doesn't derail the rest. Or lock a recording to one language.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M5 5h6v6H5zM13 13h6v6h-6z"/><path d="M13 7h4a2 2 0 012 2v2M11 17H7a2 2 0 01-2-2v-2"/></svg></div>
+          <h3 data-i18n="f.simplified.t">Simplified Chinese out</h3>
+          <p data-i18n="f.simplified.d">Traditional characters are converted to Simplified with OpenCC before anything is shown or saved.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></div>
+          <h3 data-i18n="f.gpu.t">Fast on your GPU</h3>
+          <p data-i18n="f.gpu.d">Metal on macOS, Vulkan on Windows, flash attention on. If the GPU can't be set up, that transcription quietly runs on the CPU.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg></div>
+          <h3 data-i18n="f.queue.t">A queue, not a wizard</h3>
+          <p data-i18n="f.queue.d">Drop in as many files as you like. They're transcribed one at a time, with live segments, progress, speed and time remaining.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+          <h3 data-i18n="f.play.t">Click to listen back</h3>
+          <p data-i18n="f.play.d">Every segment is timestamped. Click one to play the recording from exactly that point.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13l2 2 4-4"/></svg></div>
+          <h3 data-i18n="f.export.t">Markdown export</h3>
+          <p data-i18n="f.export.d">One <code>[HH:MM:SS] text</code> block per segment, ready for notes, docs or your favourite LLM.</p>
+        </article>
+        <article class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 012-2h12a2 2 0 012 2v16l-8-4-8 4z"/></svg></div>
+          <h3 data-i18n="f.library.t">A library that remembers</h3>
+          <p data-i18n="f.library.d">Transcripts persist between launches. Re-run, cancel or remove. If a file moves, its transcript stays readable. Your audio is never copied.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- Mixed-language highlight -->
+  <section class="section alt" id="mixed">
+    <div class="wrap split">
+      <div>
+        <p class="kicker" data-i18n="mixed.kicker">Per-stretch language detection</p>
+        <h2 data-i18n="mixed.title">Switch languages mid-sentence. Visper keeps up.</h2>
+        <p data-i18n="mixed.p1">Whisper's built-in auto-detect guesses one language for a whole file, so a later stretch in the other language gets pulled off course. Visper instead decides Chinese or English for every stretch between pauses, then transcribes each in its own language.</p>
+        <p data-i18n="mixed.p2">English stays English, Chinese stays Chinese. No translation, ever.</p>
+        <a class="textlink" href="https://github.com/chiyiangel/visper/blob/main/docs/adr/0002-zh-en-per-chunk.md" rel="noopener" data-i18n="mixed.link">Read the design decision (ADR 0002) →</a>
+      </div>
+      <div class="md-card" aria-label="Example Markdown export">
+        <div class="md-head"><span>产品讨论.md</span><span class="muted">Markdown</span></div>
+<pre><code><span class="t">[00:00:04]</span> 我们先看一下这次产品讨论的目标。
+
+<span class="t">[00:00:18]</span> 界面需要更清晰，让主要操作自然出现。
+
+<span class="t">[00:00:36]</span> We should keep the workflow simple and predictable.
+
+<span class="t">[00:00:52]</span> 语言自动判断，中文和英文都保留原文。
+
+<span class="t">[00:01:42]</span> 完成之后，可以按分段回听，再导出 Markdown。</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section" id="how">
+    <div class="wrap">
+      <header class="sec-head">
+        <p class="kicker" data-i18n="how.kicker">How it works</p>
+        <h2 data-i18n="how.title">From audio file to transcript, in five steps</h2>
+      </header>
+      <ol class="pipeline">
+        <li><span class="n">1</span><h3 data-i18n="how.1.t">Decode</h3><p data-i18n="how.1.d">m4a, mp3, wav, flac or aac decoded with Symphonia, resampled to 16 kHz mono with Rubato.</p></li>
+        <li><span class="n">2</span><h3 data-i18n="how.2.t">Split on silence</h3><p data-i18n="how.2.d">20 ms loudness frames against an adaptive noise floor. Pauses of 400 ms+ separate stretches of up to 30 s.</p></li>
+        <li><span class="n">3</span><h3 data-i18n="how.3.t">Detect language</h3><p data-i18n="how.3.d">In Auto mode, each stretch is judged Chinese or English. Neighbours in the same language share one window.</p></li>
+        <li><span class="n">4</span><h3 data-i18n="how.4.t">Transcribe</h3><p data-i18n="how.4.d">whisper.cpp with beam search on Metal or Vulkan, falling back to the CPU when needed.</p></li>
+        <li><span class="n">5</span><h3 data-i18n="how.5.t">Simplify &amp; store</h3><p data-i18n="how.5.d">OpenCC converts to Simplified Chinese; segments stream to the window and into your local library.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Models -->
+  <section class="section alt" id="models">
+    <div class="wrap">
+      <header class="sec-head">
+        <p class="kicker" data-i18n="models.kicker">Two models</p>
+        <h2 data-i18n="models.title">Pick accuracy or speed. Switch any time.</h2>
+        <p data-i18n="models.lede">Choose on first launch, change from the Library footer later. Every transcript remembers which model produced it.</p>
+      </header>
+      <div class="models">
+        <article class="model">
+          <div class="model-top"><h3>Large v3</h3><span class="size">≈ 3.1 GB</span></div>
+          <p class="model-tag" data-i18n="m.large.tag">Most accurate</p>
+          <p data-i18n="m.large.d">Best for interviews full of names and specialist terms.</p>
+          <code>ggml-large-v3.bin</code>
+        </article>
+        <article class="model">
+          <div class="model-top"><h3>Large v3 Turbo</h3><span class="size">≈ 1.6 GB</span></div>
+          <p class="model-tag" data-i18n="m.turbo.tag">Much faster</p>
+          <p data-i18n="m.turbo.d">Slightly less accurate. Great for everyday meetings. Decoder cut from 32 to 4 layers.</p>
+          <code>ggml-large-v3-turbo.bin</code>
+        </article>
+      </div>
+      <p class="note" data-i18n="models.note">Benchmark on an M3 Pro: Metal ran inference about 1.6× faster than Vulkan through MoltenVK, using about 0.5 GB less memory.</p>
+    </div>
+  </section>
+
+  <!-- Build -->
+  <section class="section" id="build">
+    <div class="wrap split">
+      <div>
+        <p class="kicker" data-i18n="build.kicker">Build from source</p>
+        <h2 data-i18n="build.title">Up and running in a few commands</h2>
+        <p data-i18n="build.p1">Visper needs Rust stable (installed automatically via rust-toolchain.toml) and CMake. On first launch it asks which model to download.</p>
+        <ul class="reqs">
+          <li data-i18n="build.r1">macOS on Apple Silicon, or Windows 10/11 x86_64</li>
+          <li data-i18n="build.r2">Windows: MSVC Build Tools, CMake and the LunarG Vulkan SDK</li>
+          <li data-i18n="build.r3">1.6–3.1 GB of disk space for the model</li>
+        </ul>
+        <p class="soon"><span class="pill" data-i18n="soon.pill">Coming soon</span> <span data-i18n="build.soon">Prebuilt packages for both platforms.</span></p>
+      </div>
+      <div class="term">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="mac">macOS</button>
+          <button role="tab" aria-selected="false" data-tab="win">Windows</button>
+          <button class="copy" type="button" data-i18n="build.copy">Copy</button>
+        </div>
+<pre class="tab-pane" data-pane="mac"><code><span class="c"># Xcode Command Line Tools + Homebrew</span>
+brew install cmake
+git clone https://github.com/chiyiangel/visper.git
+cd visper
+cargo run --release
+
+<span class="c"># Optional: Visper.app + .dmg in target/release/bundle/</span>
+scripts/bundle-macos.sh --dmg</code></pre>
+<pre class="tab-pane" data-pane="win" hidden><code><span class="c"># MSVC Build Tools, CMake, LunarG Vulkan SDK</span>
+<span class="c"># MSBuild needs a short target dir (260-char path limit)</span>
+setx CARGO_TARGET_DIR C:\t
+
+<span class="c"># in a new terminal</span>
+git clone https://github.com/chiyiangel/visper.git
+cd visper
+cargo run --release</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Scope -->
+  <section class="section alt" id="scope">
+    <div class="wrap">
+      <header class="sec-head">
+        <p class="kicker" data-i18n="scope.kicker">Deliberately small</p>
+        <h2 data-i18n="scope.title">What Visper doesn't do</h2>
+        <p data-i18n="scope.lede">A focused tool that does one job well. These are out of scope by design:</p>
+      </header>
+      <ul class="chips">
+        <li data-i18n="scope.1">Live microphone capture</li>
+        <li data-i18n="scope.2">Translation</li>
+        <li data-i18n="scope.3">Summaries</li>
+        <li data-i18n="scope.4">Speaker labels</li>
+        <li data-i18n="scope.5">Transcript editing</li>
+        <li data-i18n="scope.6">Custom prompts or vocabularies</li>
+        <li data-i18n="scope.7">Languages other than Chinese &amp; English</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="final">
+    <div class="wrap final-inner">
+      <svg class="mark big" viewBox="180 400 910 520" aria-hidden="true"><g fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M865 450H1045" class="m-lines" stroke-width="70"/><path d="M892 557H1045" class="m-lines" stroke-width="70"/><path d="M262 505L430 795C490 860 575 860 630 795L800 485" class="m-vee" stroke-width="140"/></g></svg>
+      <h2 data-i18n="final.title">Open source, and staying that way.</h2>
+      <p data-i18n="final.lede">Dual licensed under MIT or Apache-2.0. Issues and pull requests welcome, in English or Chinese.</p>
+      <div class="cta center">
+        <a class="btn btn-primary" href="https://github.com/chiyiangel/visper" rel="noopener"><span data-i18n="cta.github">View on GitHub</span></a>
+        <a class="btn btn-secondary" href="https://github.com/chiyiangel/visper/blob/main/CONTRIBUTING.md" rel="noopener"><span data-i18n="cta.contribute">How to contribute</span></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <span>© 2026 Visper contributors · <span data-i18n="foot.license">MIT OR Apache-2.0</span></span>
+    <span class="foot-links">
+      <a href="https://github.com/chiyiangel/visper" rel="noopener">GitHub</a>
+      <a href="https://github.com/chiyiangel/visper/blob/main/CHANGELOG.md" rel="noopener" data-i18n="foot.changelog">Changelog</a>
+      <a href="https://visper-chi.vercel.app" rel="noopener" data-i18n="foot.canvas">Design canvas</a>
+    </span>
+    <span class="muted" data-i18n="foot.credit">Built on OpenAI Whisper, whisper.cpp and GPUI.</span>
+  </div>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>

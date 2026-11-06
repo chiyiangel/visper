@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="lift" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="7" flood-color="#000" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#faf9f6" filter="url(#lift)"/>
+  <rect x="101" y="101" width="822" height="822" rx="184" fill="none" stroke="rgba(32,38,34,0.07)" stroke-width="2"/>
+  <!-- Mark: 544 wide (66% of the body), its 910x520 box centred on the tile. -->
+  <g transform="translate(512 512) scale(0.5978) translate(-635 -660)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M865 450H1045" stroke="#a3bea4" stroke-width="70"/>
+    <path d="M892 557H1045" stroke="#a3bea4" stroke-width="70"/>
+    <path d="M262 505L430 795C490 860 575 860 630 795L800 485" stroke="#426650" stroke-width="140"/>
+  </g>
+</svg>
